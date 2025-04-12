@@ -1,4 +1,4 @@
-# MCJPG AI 模型路由
+# MCJPG Zero AI
 
 [![许可证: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]({占位符}[指向许可证文件的链接]) <!-- 选择一个许可证 (例如 MIT, Apache 2.0) 并更新链接 -->
 ![Python 版本](https://img.shields.io/badge/python-3.8+-blue.svg)
@@ -258,4 +258,3 @@ curl -X POST "<路由URL>/v1/audio/transcriptions" \
 *   由 [MCJPG](https://mcjpg.org/) 组织开发和维护。 
 *   基于优秀的 [FastAPI](https://fastapi.tiangolo.com/) 框架构建。
 *   依赖 [OpenAI Python SDK](https://github.com/openai/openai-python)。
-```
