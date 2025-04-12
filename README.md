@@ -4,7 +4,7 @@
 ![Python 版本](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![框架](https://img.shields.io/badge/Framework-FastAPI-green.svg)
 
-一个 FastAPI 应用，作为处理多种 AI 任务（聊天、嵌入、文本转语音、语音转文本、**实时 API**）的智能路由。它提供了一个统一的模型接口 (`MCJPG-Zero-v1`)，同时根据请求类型或内容分析，将请求定向到最优的上游 OpenAI 兼容模型。由 MCJPG 组织开发。
+一个 FastAPI 应用，作为处理多种 AI 任务（聊天、视觉识别、深度思考、实时对话、嵌入、文本转语音、语音转文本、多媒体生成/编辑）的智能路由。它提供了一个统一的模型接口 (`MCJPG-Zero-v1`)，同时根据请求类型或内容分析，将请求定向到最优的上游 OpenAI 兼容模型。由 MCJPG 组织开发。
 
 ## 概述
 
