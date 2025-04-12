@@ -9,30 +9,38 @@ from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 from openai import OpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionChunk
-# Import types for other endpoints if needed for stricter validation, or handle as Dict/Any
 from openai.types.create_embedding_response import CreateEmbeddingResponse, Embedding
 from openai.types.audio import Transcription
 from dotenv import load_dotenv
-import httpx # Keep for potential direct streaming later if needed, though openai lib handles most cases
+import httpx # Used by openai client and for error handling
+from urllib.parse import urljoin # For safely joining URL parts
 
 # --- 配置 ---
 load_dotenv() # 加载 .env 文件 (如果存在)
 
-PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "http://127.0.0.1:3000")
+PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "https://proxy.mcjpg.org:29678")
 if not PROXY_BASE_URL.endswith('/'):
     PROXY_BASE_URL += '/'
 V1_ROUTE_PREFIX = "v1"
 
 SELF_MODEL_ID = "MCJPG-Zero-v1"
-SELF_MODEL_CONTEXT_LENGTH = 65536
+SELF_MODEL_CONTEXT_LENGTH = 65536 # Informational, not strictly enforced here
 
+# --- Routing/Upstream Model Definitions ---
 ROUTING_MODEL = "gemini-2.0-flash"
-DIRECT_TOOL_CALL_MODEL = "gpt-4o-mini" # 指定处理工具调用的模型
-
-# --- NEW: Upstream model definitions ---
+DIRECT_TOOL_CALL_MODEL = "gpt-4o-mini"
 UPSTREAM_EMBEDDING_MODEL = "text-embedding-3-large"
 UPSTREAM_TTS_MODEL = "tts-1"
 UPSTREAM_STT_MODEL = "whisper-1"
+UPSTREAM_REALTIME_MODEL = "gpt-4o-realtime-preview"
+
+# --- Realtime Proxy Configuration ---
+# Base URL for WebSocket connections via the proxy
+PROXY_WEBSOCKET_BASE_URL = os.getenv("PROXY_WEBSOCKET_BASE_URL", PROXY_BASE_URL.replace("https://", "wss://").replace("http://", "ws://"))
+if not PROXY_WEBSOCKET_BASE_URL.endswith('/'):
+    PROXY_WEBSOCKET_BASE_URL += '/'
+# Path prefix on the proxy for realtime endpoints
+REALTIME_PATH_PREFIX = os.getenv("REALTIME_PATH_PREFIX", "v1/realtime") # Example: "v1/realtime" -> wss://proxy.../v1/realtime/model-name
 
 MCJPG_SYSTEM_PROMPT = "你是由MCJPG组织开发的AI大语言模型,MCJPG组织是一个致力于Minecraft技术交流和服务器宣传的组织,你的输入输出内容应符合中华人民共和国法律。"
 
@@ -43,11 +51,11 @@ logger = logging.getLogger(__name__)
 # --- FastAPI 应用 ---
 app = FastAPI(
     title="MCJPG AI Model Router",
-    description="Routes requests to different upstream models (Chat, Embeddings, TTS, STT) based on content and handles tool calls.",
-    version="1.2.0", # Version bump for new features
+    description="Routes requests to different upstream models (Chat, Embeddings, TTS, STT, Realtime) based on content and handles tool calls.",
+    version="1.3.0", # Version bump for Realtime support
 )
 
-# --- Pydantic 模型定义 (匹配 OpenAI API 格式) ---
+# --- Pydantic 模型定义 ---
 
 # Model Listing Models
 class ModelData(BaseModel):
@@ -55,8 +63,6 @@ class ModelData(BaseModel):
     object: str = "model"
     created: int = 1677610600
     owned_by: str = "mcjpg"
-    # Note: Standard OpenAI model object doesn't explicitly list capabilities like 'tts', 'embedding'.
-    # Listing the model ID implies it's available for endpoints that accept it.
     permission: List = []
     root: str = Field(default_factory=str)
     parent: Optional[str] = None
@@ -65,10 +71,10 @@ class ModelList(BaseModel):
     object: str = "list"
     data: List[ModelData]
 
-# Chat Completion Models (Existing)
+# Chat Completion Models
 class ChatCompletionMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
-    content: Union[str, List[Dict[str, Any]], None] = None # Content can be None for tool calls
+    content: Union[str, List[Dict[str, Any]], None] = None
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_calls: Optional[List[Dict]] = None
@@ -88,9 +94,8 @@ class ChatCompletionRequest(BaseModel):
     user: Optional[str] = None
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
-    # We will ignore most non-core params unless forwarding directly (like tool calls or other endpoints)
 
-# --- NEW: Embedding Models ---
+# Embedding Models
 class EmbeddingRequest(BaseModel):
     model: str # Will be validated to be SELF_MODEL_ID
     input: Union[str, List[str], List[int], List[List[int]]]
@@ -98,17 +103,17 @@ class EmbeddingRequest(BaseModel):
     dimensions: Optional[int] = None
     user: Optional[str] = None
 
-# --- NEW: TTS Models ---
+# TTS Models
 class TTSRequest(BaseModel):
     model: str # Will be validated to be SELF_MODEL_ID
     input: str
     voice: Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
-    response_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]] = "mp3" # Default added
-    speed: Optional[float] = None # Range 0.25 to 4.0
+    response_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]] = "mp3"
+    speed: Optional[float] = None
 
-# --- NEW: STT - Note: Handled via Form data, not a single Pydantic model for the body ---
+# STT - Handled via Form data
 
-# --- Routing Function Definition (Existing) ---
+# Routing Function Definition
 class SelectModelParams(BaseModel):
     reasoning: str = Field(description="解释为什么选择这个模型 Explain why this model was chosen.")
     selected_task_type: Literal[
@@ -127,6 +132,17 @@ select_model_tool = {
     }
 }
 
+# Realtime Connection Info Models
+class RealtimeConnectionRequest(BaseModel):
+    model: str # Should be SELF_MODEL_ID
+
+class RealtimeConnectionResponse(BaseModel):
+    model: str = Field(description="The upstream realtime model the client should target.")
+    websocket_url: str = Field(description="The WebSocket URL the client should connect to (via proxy).")
+    api_key: str = Field(description="The API key the client should use for authentication with the upstream WebSocket.")
+    protocol_hint: Literal["websocket", "webrtc"] = "websocket"
+
+
 # --- 辅助函数 ---
 
 def get_user_api_key(authorization: Optional[str] = Header(None)) -> Optional[str]:
@@ -135,19 +151,20 @@ def get_user_api_key(authorization: Optional[str] = Header(None)) -> Optional[st
         return authorization.split("Bearer ")[1]
     return None
 
-def contains_image(messages: List[ChatCompletionMessage]) -> bool:
-    """检查消息列表中是否包含图片内容"""
+def contains_image(messages: List[Union[ChatCompletionMessage, ChatCompletionMessageParam]]) -> bool:
+    """检查消息列表中是否包含图片内容 (works with both Pydantic models and dicts)"""
     for msg in messages:
-        if isinstance(msg.content, list):
-            for item in msg.content:
+        content = msg.content if isinstance(msg, ChatCompletionMessage) else msg.get("content")
+        if isinstance(content, list):
+            for item in content:
                 if isinstance(item, dict) and item.get("type") == "image_url":
                     return True
     return False
 
-# Map Task (Existing - unchanged)
 def map_task_to_model(task_type: str, has_image: bool) -> str:
     """根据任务类型和是否有图片，映射到具体的上游聊天模型名称"""
     logger.info(f"Mapping task type: {task_type}, Has image: {has_image}")
+    # (Mapping logic remains the same as before)
     if task_type in ["translation", "roleplay", "general_chat", "simple_vision"]:
         return "gemini-2.0-flash"
     elif task_type == "web_search":
@@ -181,7 +198,7 @@ def prepare_upstream_messages(user_messages: List[ChatCompletionMessageParam]) -
         if msg.get("role") == "system":
             user_system_prompt_content = msg.get("content")
         else:
-            other_messages.append(msg)
+            other_messages.append(msg) # Keep original order
 
     processed_messages.append({"role": "system", "content": MCJPG_SYSTEM_PROMPT})
 
@@ -202,27 +219,27 @@ def prepare_upstream_messages(user_messages: List[ChatCompletionMessageParam]) -
 
 async def get_openai_client(api_key: str) -> AsyncOpenAI:
     """获取配置好的 AsyncOpenAI 客户端"""
-    # Ensure httpx client is implicitly created/managed by AsyncOpenAI
-    return AsyncOpenAI(api_key=api_key, base_url=f"{PROXY_BASE_URL}{V1_ROUTE_PREFIX}")
+    # Ensure the base URL is correctly formatted for the HTTP client
+    http_base_url = f"{PROXY_BASE_URL.rstrip('/')}/{V1_ROUTE_PREFIX.strip('/')}"
+    return AsyncOpenAI(api_key=api_key, base_url=http_base_url)
 
-# --- Helper for handling API errors ---
+
 async def handle_openai_api_error(e: Exception, upstream_model_name: str):
+    """Handles errors from upstream API calls"""
     logger.exception(f"Error during request to upstream model {upstream_model_name}: {e}")
     status_code = 500
     error_detail = f"Error communicating with upstream model '{upstream_model_name}': {str(e)}"
 
-    # Try to extract status code and details from OpenAI/HTTPX errors
     if isinstance(e, httpx.HTTPStatusError):
         status_code = e.response.status_code
         try:
-            # Attempt to parse the error response body
             error_body = e.response.json()
             error_detail = error_body.get("error", {}).get("message", e.response.text)
         except json.JSONDecodeError:
-            error_detail = e.response.text # Fallback to raw text
+            error_detail = e.response.text
         error_detail = f"Upstream API error ({status_code}) for model '{upstream_model_name}': {error_detail}"
-    elif hasattr(e, 'status_code'): # Handle potential errors from the openai library itself
-         status_code = e.status_code
+    elif hasattr(e, 'status_code'): # Handle potential errors from openai library itself
+         status_code = getattr(e, 'status_code')
          error_detail = f"Upstream API error ({status_code}) for model '{upstream_model_name}': {str(e)}"
 
     raise HTTPException(status_code=status_code, detail=error_detail)
@@ -233,56 +250,42 @@ async def handle_openai_api_error(e: Exception, upstream_model_name: str):
 @app.get(f"/{V1_ROUTE_PREFIX}/models", response_model=ModelList)
 async def list_models():
     """
-    提供模型列表，只包含我们自定义的模型。
-    Note: Listing MCJPG-Zero-v1 implies it can be used with /chat/completions,
-    /embeddings, /audio/speech, /audio/transcriptions endpoints where appropriate.
+    提供模型列表,包含我们自定义的模型ID.
+    Note: Listing MCJPG-Zero-v1 implies it can be used with compatible endpoints:
+    - /chat/completions (routed based on content)
+    - /embeddings (forwarded to text-embedding-3-large)
+    - /audio/speech (forwarded to tts-1)
+    - /audio/transcriptions (forwarded to whisper-1)
+    - Realtime API interaction (initiated via /realtime/connection_info, forwarded to gpt-4o-realtime-preview)
     """
     model_data = ModelData(
         id=SELF_MODEL_ID,
         root=SELF_MODEL_ID,
-        # owned_by="mcjpg" # Already set by default
     )
     return ModelList(data=[model_data])
 
-# --- NEW: Embeddings Endpoint ---
+# --- Embeddings Endpoint ---
 @app.post(f"/{V1_ROUTE_PREFIX}/embeddings", response_model=CreateEmbeddingResponse)
 async def create_embedding(
     request: EmbeddingRequest,
     authorization: Optional[str] = Header(None)
 ):
-    """
-    Handles embedding requests.
-    If model is SELF_MODEL_ID, forwards to UPSTREAM_EMBEDDING_MODEL.
-    """
+    """Handles embedding requests, forwarding to upstream."""
     user_api_key = get_user_api_key(authorization)
     if not user_api_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     if request.model != SELF_MODEL_ID:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid model requested. This endpoint only supports '{SELF_MODEL_ID}' for routing."
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid model. Only '{SELF_MODEL_ID}' supported.")
 
-    logger.info(f"Received embedding request for model: {request.model}. Forwarding to {UPSTREAM_EMBEDDING_MODEL}.")
-
+    logger.info(f"Forwarding embedding request to {UPSTREAM_EMBEDDING_MODEL}.")
     client = None
     try:
         client = await get_openai_client(user_api_key)
-        embedding_params = {
-            "model": UPSTREAM_EMBEDDING_MODEL,
-            "input": request.input,
-        }
-        if request.encoding_format:
-            embedding_params["encoding_format"] = request.encoding_format
-        if request.dimensions:
-            embedding_params["dimensions"] = request.dimensions
-        if request.user:
-            embedding_params["user"] = request.user # Pass user if provided
-
-        response = await client.embeddings.create(**embedding_params)
+        params = request.model_dump(exclude={"model"}, exclude_none=True)
+        params["model"] = UPSTREAM_EMBEDDING_MODEL # Override model name
+        response = await client.embeddings.create(**params)
         logger.info(f"Successfully received embedding response from {UPSTREAM_EMBEDDING_MODEL}.")
-        # Pydantic response_model will handle serialization
         return response
     except Exception as e:
         await handle_openai_api_error(e, UPSTREAM_EMBEDDING_MODEL)
@@ -290,219 +293,207 @@ async def create_embedding(
         if client:
             await client.close()
 
-
-# --- NEW: TTS Endpoint ---
+# --- TTS Endpoint ---
 @app.post(f"/{V1_ROUTE_PREFIX}/audio/speech")
 async def create_speech(
     request: TTSRequest,
     authorization: Optional[str] = Header(None)
 ):
-    """
-    Handles Text-to-Speech (TTS) requests.
-    If model is SELF_MODEL_ID, forwards to UPSTREAM_TTS_MODEL.
-    Returns audio stream or file.
-    """
+    """Handles TTS requests, forwarding to upstream and streaming audio back."""
     user_api_key = get_user_api_key(authorization)
     if not user_api_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     if request.model != SELF_MODEL_ID:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid model requested. This endpoint only supports '{SELF_MODEL_ID}' for routing."
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid model. Only '{SELF_MODEL_ID}' supported.")
 
-    logger.info(f"Received TTS request for model: {request.model}. Forwarding to {UPSTREAM_TTS_MODEL}.")
-
+    logger.info(f"Forwarding TTS request to {UPSTREAM_TTS_MODEL}.")
     client = None
     upstream_response: Optional[httpx.Response] = None
     try:
         client = await get_openai_client(user_api_key)
-        tts_params = {
-            "model": UPSTREAM_TTS_MODEL,
-            "input": request.input,
-            "voice": request.voice,
-        }
-        # Add optional parameters if provided
-        if request.response_format:
-            tts_params["response_format"] = request.response_format
-        if request.speed:
-            tts_params["speed"] = request.speed
+        params = request.model_dump(exclude={"model"}, exclude_none=True)
+        params["model"] = UPSTREAM_TTS_MODEL # Override model name
 
-        # The OpenAI library's method returns an httpx.Response containing the audio
-        # We need to stream this response back to the client
-        upstream_response = await client.audio.speech.create(**tts_params)
-        upstream_response.raise_for_status() # Raise exception for 4xx/5xx errors
+        upstream_response = await client.audio.speech.create(**params)
+        upstream_response.raise_for_status() # Check for upstream errors
 
         logger.info(f"Successfully received TTS audio stream from {UPSTREAM_TTS_MODEL}.")
 
-        # Determine content type from upstream or request format
         content_type = upstream_response.headers.get("content-type", f"audio/{request.response_format}")
+        filename = f"speech.{request.response_format}"
 
-        # Stream the audio content back
         async def audio_stream_generator() -> AsyncGenerator[bytes, None]:
-            async for chunk in upstream_response.aiter_bytes():
-                yield chunk
-            # Ensure the client is closed *after* streaming is done
-            if client:
-                 await client.close()
-                 client = None # Prevent double close in finally
-            logger.info("TTS audio streaming finished.")
-
+            try:
+                async for chunk in upstream_response.aiter_bytes():
+                    yield chunk
+                logger.info("TTS audio streaming finished.")
+            finally:
+                # Ensure upstream response is closed
+                if upstream_response:
+                    await upstream_response.aclose()
+                # Close client *after* streaming is done
+                if client:
+                    await client.close()
+                    # client = None # Prevent double close in outer finally
 
         return StreamingResponse(
              audio_stream_generator(),
              media_type=content_type,
-             headers={"Content-Disposition": f"attachment; filename=speech.{request.response_format}"} # Optional: suggest filename
+             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
 
-    except httpx.HTTPStatusError as e:
-         # Close client before raising HTTP exception if stream setup failed early
-        if client:
-            await client.close()
-        await handle_openai_api_error(e, UPSTREAM_TTS_MODEL)
     except Exception as e:
-        if client:
-            await client.close()
-        # Handle generic errors during request setup
-        await handle_openai_api_error(e, UPSTREAM_TTS_MODEL)
-    finally:
-        # Close response stream if it exists and wasn't handled by the generator
+        # Close resources if error occurred before streaming generator took over
         if upstream_response:
-            await upstream_response.aclose()
-        # Close client only if it wasn't closed by the generator's success path
+             await upstream_response.aclose()
         if client:
-            await client.close()
+             await client.close()
+        # Let error handler raise HTTPException
+        await handle_openai_api_error(e, UPSTREAM_TTS_MODEL)
+    # Note: No finally block needed here as resources are closed within try/except or by generator
 
-
-# --- NEW: STT Endpoint ---
-# Note: Uses Form data, not JSON body
+# --- STT Endpoint ---
 @app.post(f"/{V1_ROUTE_PREFIX}/audio/transcriptions", response_model=Transcription)
 async def create_transcription(
     authorization: Optional[str] = Header(None),
-    # --- Parameters from multipart/form-data ---
     file: UploadFile = File(...),
-    model: str = Form(...), # Model ID is part of the form
+    model: str = Form(...),
     language: Optional[str] = Form(None),
     prompt: Optional[str] = Form(None),
     response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = Form("json"),
     temperature: Optional[float] = Form(0.0),
-    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = Form(None) # New parameter in OpenAI API
+    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = Form(None) # Note: SDK expects List type
 ):
-    """
-    Handles Speech-to-Text (STT) requests using multipart/form-data.
-    If model is SELF_MODEL_ID, forwards to UPSTREAM_STT_MODEL.
-    """
+    """Handles STT requests using form-data, forwarding to upstream."""
     user_api_key = get_user_api_key(authorization)
     if not user_api_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    # Validate the model ID received in the form data
     if model != SELF_MODEL_ID:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid model requested ('{model}'). This endpoint only supports '{SELF_MODEL_ID}' for routing."
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid model ('{model}'). Only '{SELF_MODEL_ID}' supported.")
 
-    logger.info(f"Received STT request for model: {model}. Forwarding to {UPSTREAM_STT_MODEL}.")
-
+    logger.info(f"Forwarding STT request to {UPSTREAM_STT_MODEL}.")
     client = None
     try:
         client = await get_openai_client(user_api_key)
+        file_content = await file.read() # Read file content
 
-        # Prepare parameters, carefully handling optional ones
         stt_params = {
             "model": UPSTREAM_STT_MODEL,
-            "file": (file.filename, await file.read(), file.content_type), # Pass file tuple
+            "file": (file.filename, file_content, file.content_type),
             "response_format": response_format,
-            "temperature": temperature
+            "temperature": temperature,
         }
-        if language:
-            stt_params["language"] = language
-        if prompt:
-            stt_params["prompt"] = prompt
-        if timestamp_granularities:
-             # The SDK expects a list for this parameter if provided
-             stt_params["timestamp_granularities"] = timestamp_granularities
+        # Add optional parameters if provided by user
+        if language: stt_params["language"] = language
+        if prompt: stt_params["prompt"] = prompt
+        if timestamp_granularities: stt_params["timestamp_granularities"] = timestamp_granularities # Pass as list
 
         response = await client.audio.transcriptions.create(**stt_params)
         logger.info(f"Successfully received STT response from {UPSTREAM_STT_MODEL}.")
-        # Pydantic response_model handles serialization
         return response
     except Exception as e:
         await handle_openai_api_error(e, UPSTREAM_STT_MODEL)
     finally:
-        # Ensure the uploaded file resource is closed
-        await file.close()
+        await file.close() # Ensure uploaded file handle is closed
         if client:
             await client.close()
 
+# --- Realtime Connection Info Endpoint ---
+@app.post(f"/{V1_ROUTE_PREFIX}/realtime/connection_info", response_model=RealtimeConnectionResponse)
+async def get_realtime_connection_info(
+    request: RealtimeConnectionRequest,
+    authorization: Optional[str] = Header(None)
+):
+    """Provides connection info for Realtime API (WebSocket via proxy)."""
+    user_api_key = get_user_api_key(authorization)
+    if not user_api_key:
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-# --- Chat Completions Endpoint (Existing Logic) ---
+    if request.model != SELF_MODEL_ID:
+        raise HTTPException(status_code=400, detail=f"Invalid model ('{request.model}'). Only '{SELF_MODEL_ID}' supported.")
+
+    logger.info(f"Preparing Realtime connection info for upstream {UPSTREAM_REALTIME_MODEL}.")
+
+    # Construct the upstream WebSocket URL via the configured proxy base and path
+    # Example: wss://proxy.mcjpg.org:29678/v1/realtime/gpt-4o-realtime-preview
+    # Use urljoin for robust path combination
+    upstream_path = f"{REALTIME_PATH_PREFIX.strip('/')}/{UPSTREAM_REALTIME_MODEL}"
+    upstream_websocket_url = urljoin(PROXY_WEBSOCKET_BASE_URL, upstream_path)
+
+    logger.info(f"Providing WebSocket URL: {upstream_websocket_url}")
+
+    return RealtimeConnectionResponse(
+        model=UPSTREAM_REALTIME_MODEL,
+        websocket_url=upstream_websocket_url,
+        api_key=user_api_key, # Client needs this key to authenticate the WS connection
+        protocol_hint="websocket"
+    )
+
+# --- Chat Completions Endpoint ---
 @app.post(f"/{V1_ROUTE_PREFIX}/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
     authorization: Optional[str] = Header(None)
 ):
-    """
-    Handles chat completion requests.
-    Routes based on content analysis or forwards directly for tool calls.
-    """
+    """Handles chat requests: routes or forwards direct tool calls."""
     user_api_key = get_user_api_key(authorization)
     if not user_api_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     if request.model != SELF_MODEL_ID:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid model requested. This endpoint only supports '{SELF_MODEL_ID}' for chat."
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid model. Only '{SELF_MODEL_ID}' supported.")
 
-    logger.info(f"Received chat request for model: {request.model}, Stream: {request.stream}, Tools specified: {bool(request.tools or request.tool_choice)}")
+    logger.info(f"Received chat request: Stream={request.stream}, Tools={bool(request.tools or request.tool_choice)}")
 
     upstream_model_name = None
-    routing_reasoning = "N/A" # For logging
-
+    routing_reasoning = "N/A"
     is_direct_tool_call = bool(request.tools or request.tool_choice)
 
     if is_direct_tool_call:
         upstream_model_name = DIRECT_TOOL_CALL_MODEL
-        logger.info(f"Chat request contains tools/tool_choice. Directly forwarding to {upstream_model_name}.")
+        logger.info(f"Direct tool call/choice request. Forwarding to {upstream_model_name}.")
     else:
-        # --- Execute Routing Logic ---
-        logger.info("Chat request does not contain tools/tool_choice. Proceeding with model routing.")
+        # --- Content-based Routing Logic ---
+        logger.info("No tools specified. Performing content routing.")
         routing_client = None
         try:
-            routing_client = await get_openai_client(user_api_key)
-            # Prepare messages for routing model (text only)
+            routing_client = await get_openai_client(user_api_key) # Use same base URL/proxy
             routing_messages: List[ChatCompletionMessageParam] = []
             user_system_prompt_content = None
             user_messages_for_routing = []
+            has_image_for_routing = False # Track if image placeholder was added
 
+            # Prepare messages for the routing model (text only)
             for msg in request.messages:
                 msg_dict = msg.model_dump(exclude_none=True)
-                if msg_dict["role"] == "system":
-                    user_system_prompt_content = msg_dict.get("content")
-                # Process content for routing model
+                role = msg_dict["role"]
+                content = msg_dict.get("content")
+
+                if role == "system":
+                    user_system_prompt_content = content # Capture user system prompt text/list
+
                 content_for_routing = None
-                if isinstance(msg_dict.get("content"), list):
-                     text_content = " ".join([item["text"] for item in msg_dict["content"] if item.get("type") == "text"])
-                     if any(item.get("type") == "image_url" for item in msg_dict["content"]):
-                          text_content += " [Image provided by user]"
-                     content_for_routing = text_content
-                elif isinstance(msg_dict.get("content"), str):
-                    content_for_routing = msg_dict.get("content")
+                if isinstance(content, list):
+                    text_content = " ".join([item["text"] for item in content if item.get("type") == "text"])
+                    if any(item.get("type") == "image_url" for item in content):
+                         text_content += " [Image provided by user]"
+                         has_image_for_routing = True # Needed for routing logic
+                    content_for_routing = text_content
+                elif isinstance(content, str):
+                    content_for_routing = content
 
-                # Add message if it has processable content for routing
-                if content_for_routing:
-                    user_messages_for_routing.append({"role": msg_dict["role"], "content": content_for_routing})
-                # else: Ignore messages without text content for routing (e.g., tool responses)
+                # Add msg if it has suitable content for routing analysis
+                if content_for_routing and role != "system": # Exclude system here, add custom below
+                    user_messages_for_routing.append({"role": role, "content": content_for_routing})
 
-            # Build routing system prompt
+            # Build the routing prompt
             routing_system_prompt = (
                  "You are an AI assistant responsible for routing user requests to the appropriate specialized AI model. "
                  "Analyze the user's message content (text only, image presence is indicated by '[Image provided by user]') and determine the primary task. "
                  "Use the 'select_upstream_model' function to indicate your choice based on the following criteria:\n"
+                # (Criteria remain the same as before)
                 "- **translation, roleplay, general_chat, simple_vision**: Use 'gemini-2.0-flash'.\n"
                 "- **web_search**: Use 'gemini-2.0-flash-search' for questions needing live web data.\n"
                 "- **search_and_reason**: Use 'jina-deepsearch-v1' for questions requiring web search combined with reasoning.\n"
@@ -516,14 +507,17 @@ async def create_chat_completion(
             )
             if user_system_prompt_content and isinstance(user_system_prompt_content, str):
                  routing_system_prompt += f"\n\nUser's System Prompt for context: {user_system_prompt_content}"
+            # Vision system prompts are ignored for routing for simplicity
 
             routing_messages.append({"role": "system", "content": routing_system_prompt})
             routing_messages.extend(user_messages_for_routing)
 
-            # Check if there are any messages left for routing after filtering
+            # Handle cases with no user messages for routing (e.g., only system prompt)
             if not user_messages_for_routing:
-                 logger.warning("No user/assistant messages with text content found for routing. Defaulting to general_chat.")
-                 upstream_model_name = map_task_to_model("general_chat", False) # Default if only system/tool messages exist
+                 logger.warning("No user/assistant text messages found for routing. Defaulting.")
+                 has_image_input = contains_image(request.messages) # Check original messages for image
+                 upstream_model_name = map_task_to_model("general_chat", has_image_input)
+                 routing_reasoning = "Defaulted due to no routable message content."
             else:
                 logger.info(f"Requesting model selection from {ROUTING_MODEL}...")
                 response = await routing_client.chat.completions.create(
@@ -534,67 +528,62 @@ async def create_chat_completion(
                     temperature=0.1,
                 )
 
-                if not response.choices or not response.choices[0].message.tool_calls:
-                    logger.error("Routing model did not return a function call.")
-                    # Defaulting instead of failing hard
-                    logger.warning("Defaulting to general_chat due to routing model failure.")
-                    upstream_model_name = map_task_to_model("general_chat", False) # Default
-                    routing_reasoning = "Routing failed, defaulted to general_chat."
+                # Process routing result or default
+                tool_call = response.choices[0].message.tool_calls[0] if response.choices and response.choices[0].message.tool_calls else None
+                if tool_call and tool_call.function.name == "select_upstream_model":
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                        task = args.get("selected_task_type")
+                        routing_reasoning = args.get("reasoning", "No reasoning provided.")
+                        if task:
+                            # Check original messages for image presence when mapping
+                            has_image_input = contains_image(request.messages)
+                            upstream_model_name = map_task_to_model(task, has_image_input)
+                            logger.info(f"Routing decision: Task='{task}', Image='{has_image_input}', Reason='{routing_reasoning}', Model='{upstream_model_name}'")
+                        else:
+                            raise ValueError("Missing 'selected_task_type'")
+                    except (json.JSONDecodeError, ValueError) as parse_err:
+                        logger.error(f"Routing function call parsing error: {parse_err}. Defaulting.")
+                        has_image_input = contains_image(request.messages)
+                        upstream_model_name = map_task_to_model("general_chat", has_image_input)
+                        routing_reasoning = f"Defaulted due to routing parse error: {parse_err}"
                 else:
-                    tool_call = response.choices[0].message.tool_calls[0]
-                    if tool_call.function.name != "select_upstream_model":
-                        logger.error(f"Routing model returned unexpected function call: {tool_call.function.name}. Defaulting.")
-                        upstream_model_name = map_task_to_model("general_chat", False) # Default
-                        routing_reasoning = f"Routing used wrong tool ({tool_call.function.name}), defaulted."
-                    else:
-                        try:
-                            function_args = json.loads(tool_call.function.arguments)
-                            selected_task_type = function_args.get("selected_task_type")
-                            routing_reasoning = function_args.get("reasoning", "No reasoning provided.")
-
-                            if not selected_task_type:
-                                logger.error(f"Routing model did not provide 'selected_task_type': {function_args}. Defaulting.")
-                                upstream_model_name = map_task_to_model("general_chat", False) # Default
-                                routing_reasoning = "Routing missing task type, defaulted."
-                            else:
-                                logger.info(f"Routing decision: Task Type='{selected_task_type}', Reasoning='{routing_reasoning}'")
-                                has_image_input = contains_image(request.messages)
-                                upstream_model_name = map_task_to_model(selected_task_type, has_image_input)
-                                logger.info(f"Selected upstream model after routing: {upstream_model_name}")
-                        except json.JSONDecodeError:
-                            logger.error(f"Failed to parse routing function arguments: {tool_call.function.arguments}. Defaulting.")
-                            upstream_model_name = map_task_to_model("general_chat", False) # Default
-                            routing_reasoning = "Routing argument parsing failed, defaulted."
+                    logger.error(f"Routing failed: No valid tool call received. Response: {response.choices[0].message if response.choices else 'No choice'}. Defaulting.")
+                    has_image_input = contains_image(request.messages)
+                    upstream_model_name = map_task_to_model("general_chat", has_image_input)
+                    routing_reasoning = "Defaulted due to routing model failure (no/invalid tool call)."
 
         except Exception as e:
-            # Log the error but default to a basic model instead of failing the request
-            logger.exception(f"Error during model selection using {ROUTING_MODEL}: {e}. Defaulting to general_chat.")
-            upstream_model_name = map_task_to_model("general_chat", False) # Default on error
-            routing_reasoning = f"Routing exception occurred ({type(e).__name__}), defaulted."
+            # Log routing error but default instead of failing the request
+            logger.exception(f"Exception during model routing: {e}. Defaulting.")
+            has_image_input = contains_image(request.messages)
+            upstream_model_name = map_task_to_model("general_chat", has_image_input)
+            routing_reasoning = f"Defaulted due to routing exception: {type(e).__name__}"
         finally:
             if routing_client:
                 await routing_client.close()
-        # --- Routing Logic End ---
+        # --- End Routing Logic ---
 
     if not upstream_model_name:
-         # This case should ideally be covered by defaults in the routing logic now
-         logger.error("Upstream model name could not be determined after routing attempts. Failing request.")
-         raise HTTPException(status_code=500, detail="Failed to determine upstream chat model.")
+         # Should be covered by defaults, but as a final fallback
+         logger.error("FATAL: Upstream model name determination failed completely.")
+         raise HTTPException(status_code=500, detail="Failed to determine upstream chat model after routing.")
 
-    # --- Forward request to selected upstream chat model ---
+    # --- Forward request to the selected upstream chat model ---
     upstream_client = None
     try:
         upstream_client = await get_openai_client(user_api_key)
+        # Prepare final messages including the MCJPG system prompt
         final_messages = prepare_upstream_messages([msg.model_dump(exclude_none=True) for msg in request.messages])
 
+        # Prepare payload, only include tools/choice if it was a direct tool call request
         upstream_payload = {
             "model": upstream_model_name,
             "messages": final_messages,
             "stream": request.stream,
-            # Conditionally include tools/tool_choice only for direct tool call forwarding
             "tools": request.tools if is_direct_tool_call else None,
             "tool_choice": request.tool_choice if is_direct_tool_call else None,
-            # Pass other relevant parameters
+            # Pass through other standard parameters
             "temperature": request.temperature,
             "top_p": request.top_p,
             "n": request.n,
@@ -611,62 +600,70 @@ async def create_chat_completion(
             # --- Handle Streaming Response ---
             async def stream_generator():
                 response_stream = None
+                client_to_close_in_stream = upstream_client # Capture client instance
                 try:
-                    logger.info(f"Streaming chat request to upstream model: {upstream_model_name} with payload keys: {list(upstream_payload.keys())}")
-                    response_stream = await upstream_client.chat.completions.create(**upstream_payload)
+                    logger.info(f"Streaming chat request to {upstream_model_name}...")
+                    response_stream = await client_to_close_in_stream.chat.completions.create(**upstream_payload)
                     async for chunk in response_stream:
-                        # Add routing reasoning to the first chunk's metadata if available (optional)
-                        # This is non-standard OpenAI, use with caution or custom clients
-                        # chunk_dict = chunk.model_dump(exclude_unset=True)
-                        # if routing_reasoning != "N/A":
-                        #    if 'choices' in chunk_dict and chunk_dict['choices']:
-                        #        chunk_dict['choices'][0]['routing_info'] = {"reasoning": routing_reasoning}
-                        #    routing_reasoning = "N/A" # Only send once
-                        # chunk_json = json.dumps(chunk_dict)
-
-                        chunk_json = chunk.model_dump_json(exclude_unset=True)
-                        yield f"data: {chunk_json}\n\n"
+                        yield f"data: {chunk.model_dump_json(exclude_unset=True)}\n\n"
                     yield "data: [DONE]\n\n"
                     logger.info("Chat streaming finished.")
-                except Exception as e:
-                    logger.exception(f"Error during streaming from upstream chat: {e}")
-                    error_payload = { "error": { "message": f"Upstream streaming error: {str(e)}", "type": "upstream_error", "code": 500 } }
-                    yield f"data: {json.dumps(error_payload)}\n\n"
-                    yield "data: [DONE]\n\n"
+                except Exception as stream_err:
+                    logger.exception(f"Error during streaming from {upstream_model_name}: {stream_err}")
+                    # Send error details in the stream if possible (non-standard)
+                    err_payload = {"error": {"message": f"Upstream stream error: {str(stream_err)}", "type": "upstream_error"}}
+                    yield f"data: {json.dumps(err_payload)}\n\n"
+                    yield "data: [DONE]\n\n" # Still need DONE message
                 finally:
-                    # Close stream resources if applicable (openai lib might handle this internally)
-                    # Close the client *after* the stream is fully consumed
-                    if upstream_client:
-                       await upstream_client.close()
+                    # Close the client *after* the stream is fully consumed or errors out
+                    if client_to_close_in_stream:
+                        await client_to_close_in_stream.close()
 
             return StreamingResponse(stream_generator(), media_type="text/event-stream")
         else:
             # --- Handle Non-Streaming Response ---
-            logger.info(f"Sending non-streaming chat request to upstream model: {upstream_model_name} with payload keys: {list(upstream_payload.keys())}")
+            logger.info(f"Sending non-streaming chat request to {upstream_model_name}...")
             completion = await upstream_client.chat.completions.create(**upstream_payload)
-            logger.info("Received non-streaming chat response from upstream.")
-            completion_dict = completion.model_dump(exclude_unset=True)
-            # Add routing reasoning (optional, non-standard)
-            # completion_dict['routing_info'] = {"model_selected": upstream_model_name, "reasoning": routing_reasoning}
-            if upstream_client:
-                 await upstream_client.close()
-            return completion_dict # FastAPI handles JSON serialization
+            logger.info(f"Received non-streaming chat response from {upstream_model_name}.")
+            # Optionally add routing info (non-standard)
+            # completion_dict = completion.model_dump(exclude_unset=True)
+            # completion_dict["routing_info"] = {"model_selected": upstream_model_name, "reasoning": routing_reasoning}
+            # return completion_dict
+            return completion.model_dump(exclude_unset=True) # Return standard response
 
     except Exception as e:
-        # Ensure client is closed on error before raising
-        if upstream_client:
-            await upstream_client.close()
+        # Handle errors during request setup or non-streaming call
         await handle_openai_api_error(e, upstream_model_name)
+    finally:
+        # Close client only if it wasn't passed to a successful stream generator
+        if upstream_client and not request.stream:
+             await upstream_client.close()
 
 
 # --- 运行服务器 (用于本地测试) ---
 if __name__ == "__main__":
     import uvicorn
-    logger.info(f"Starting MCJPG AI Router v{app.version}")
-    logger.info(f"Proxying to base URL: {PROXY_BASE_URL}{V1_ROUTE_PREFIX}")
-    logger.info(f"Chat routing model: {ROUTING_MODEL}")
-    logger.info(f"Direct tool call model: {DIRECT_TOOL_CALL_MODEL}")
-    logger.info(f"Upstream Embeddings: {UPSTREAM_EMBEDDING_MODEL}")
-    logger.info(f"Upstream TTS: {UPSTREAM_TTS_MODEL}")
-    logger.info(f"Upstream STT: {UPSTREAM_STT_MODEL}")
+
+    # Construct example Realtime URL for logging
+    example_realtime_path = f"{REALTIME_PATH_PREFIX.strip('/')}/{UPSTREAM_REALTIME_MODEL}"
+    example_realtime_url = urljoin(PROXY_WEBSOCKET_BASE_URL, example_realtime_path)
+    http_base_url = f"{PROXY_BASE_URL.rstrip('/')}/{V1_ROUTE_PREFIX.strip('/')}"
+
+
+    print("--- MCJPG AI Router Configuration ---")
+    print(f"Version: {app.version}")
+    print(f"HTTP Proxy Base URL: {http_base_url}")
+    print(f"WebSocket Proxy Base URL: {PROXY_WEBSOCKET_BASE_URL}")
+    print(f"Self Model ID: {SELF_MODEL_ID}")
+    print("-" * 35)
+    print("Upstream Models:")
+    print(f"  Chat Routing: {ROUTING_MODEL}")
+    print(f"  Direct Tool Call: {DIRECT_TOOL_CALL_MODEL}")
+    print(f"  Embeddings: {UPSTREAM_EMBEDDING_MODEL}")
+    print(f"  TTS: {UPSTREAM_TTS_MODEL}")
+    print(f"  STT: {UPSTREAM_STT_MODEL}")
+    print(f"  Realtime: {UPSTREAM_REALTIME_MODEL} (via {example_realtime_url})")
+    print("-" * 35)
+    logger.info(f"Starting MCJPG AI Router v{app.version}...")
+
     uvicorn.run("main:app", host="127.0.0.1", port=8005, reload=True)
