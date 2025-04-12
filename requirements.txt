@@ -1,0 +1,8 @@
+# requirements.txt
+fastapi[all]
+pydantic>=2.0.0 # Pydantic v2 is commonly used with modern FastAPI
+openai>=1.0.0   # Using the newer OpenAI library structure
+python-dotenv   # For loading .env files
+httpx>=0.25.0   # Required by openai>=1.0 and used directly
+uvicorn[standard] # ASGI server to run FastAPI, [standard] includes performance extras
+python-multipart
