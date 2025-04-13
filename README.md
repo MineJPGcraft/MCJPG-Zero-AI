@@ -1,14 +1,21 @@
+好的，我已经更新了 `README.md` 文件，加入了图像生成 (DALL-E 3) 和重排序 (Jina Reranker) 功能的说明、API 调用示例，并添加了如何通过环境变量修改所有上上游模型名称的部分。
+
+请查看以下更新后的 `README.md` 内容：
+
+--- START OF FILE README.md ---
+
 # MCJPG Zero AI
 
-[![许可证: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]({占位符}[指向许可证文件的链接]) <!-- 选择一个许可证 (例如 MIT, Apache 2.0) 并更新链接 -->
+[![许可证: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE) <!-- 确保你有一个 LICENSE 文件 -->
 ![Python 版本](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![框架](https://img.shields.io/badge/Framework-FastAPI-green.svg)
+![版本](https://img.shields.io/badge/Version-1.4.0-orange) <!-- 添加版本徽章 -->
 
-一个 FastAPI 应用，作为处理多种 AI 任务（聊天、视觉识别、深度思考、实时对话、嵌入、文本转语音、语音转文本、多媒体生成/编辑）的智能路由。它提供了一个统一的模型接口 (`MCJPG-Zero-v1`)，同时根据请求类型或内容分析，将请求定向到最优的上游 OpenAI 兼容模型。由 MCJPG 组织开发。
+一个 FastAPI 应用，作为处理多种 AI 任务（聊天、视觉识别、深度思考、实时对话、嵌入、文本转语音、语音转文本、**图像生成**、**重排序**）的智能路由。它提供了一个统一的模型接口 (`MCJPG-Zero-v1`)，同时根据请求类型或内容分析，将请求定向到最优的上游 OpenAI 兼容模型。由 MCJPG 组织开发。
 
 ## 概述
 
-本项目旨在解决与不同任务的多个专用 AI 模型交互的复杂性。用户无需了解应调用哪个具体模型（例如，`gpt-4o-mini` 用于工具调用，`tts-1` 用于语音合成，`gpt-4o-realtime-preview` 用于实时交互），此路由提供了一个单一、一致的模型 ID：`MCJPG-Zero-v1`。
+本项目旨在解决与不同任务的多个专用 AI 模型交互的复杂性。用户无需了解应调用哪个具体模型（例如，`gpt-4o-mini` 用于工具调用，`tts-1` 用于语音合成，`dall-e-3` 用于图像生成，`jina-reranker-v2-base-multilingual` 用于重排序，`gpt-4o-realtime-preview` 用于实时交互），此路由提供了一个单一、一致的模型 ID：`MCJPG-Zero-v1`。
 
 该路由智能地将请求转发到部署在代理（如 `proxy.mcjpg.org`）后的适当上游后端模型，简化了 API 的使用，并允许灵活管理后端模型，而无需更改面向客户端的接口。
 
@@ -22,17 +29,20 @@
     *   嵌入请求 (`/v1/embeddings`) 将发送到文本嵌入模型（例如 `text-embedding-3-large`）。
     *   文本转语音 (TTS) 请求 (`/v1/audio/speech`) 将发送到 TTS 模型（例如 `tts-1`）。
     *   语音转文本 (STT) 请求 (`/v1/audio/transcriptions`) 将发送到 STT 模型（例如 `whisper-1`）。
+    *   **图像生成请求 (`/v1/images/generations`) 将发送到图像生成模型（例如 `dall-e-3`）。**
+    *   **重排序请求 (`/v1/rerank`) 将发送到重排序模型（例如 `jina-reranker-v2-base-multilingual`）。**
 *   **实时 API 支持 (Realtime):** 提供连接信息 (`/v1/realtime/connection_info` 端点)，使客户端能通过代理与上游实时模型（例如 `gpt-4o-realtime-preview`）建立 WebSocket 连接。**注意：本路由不直接代理 WebSocket 流量，而是提供连接所需的信息。**
 *   **流式支持:** 处理聊天完成（Chat Completions）和文本转语音（Text-to-Speech）的 HTTP 流式响应。
 *   **系统提示词注入:** 自动在聊天请求前添加可配置的系统提示词（例如，定义 AI 源自 MCJPG），同时尊重用户提供的系统提示词。
-*   **可配置:** 用于路由/转发的上游代理 URL (HTTP 和 WebSocket) 和特定模型名称可以通过环境变量轻松配置。
+*   **可配置:** 用于路由/转发的上游代理 URL (HTTP 和 WebSocket) 和特定上游模型名称可以通过环境变量轻松配置。
 
 ## 工作原理
 
-1.  **接收请求:** 用户向路由发送 API 请求（聊天、嵌入、TTS、STT、**实时连接信息**），指定 `model: "MCJPG-Zero-v1"`。请求必须包含有效的 `Authorization: Bearer <用户API密钥>` 头。
-2.  **端点识别:** 路由识别目标端点（例如 `/v1/chat/completions`, `/v1/embeddings`, `/v1/realtime/connection_info`）。
+1.  **接收请求:** 用户向路由发送 API 请求（聊天、嵌入、TTS、STT、**图像生成**、**重排序**、**实时连接信息**），指定 `model: "MCJPG-Zero-v1"`。请求必须包含有效的 `Authorization: Bearer <用户API密钥>` 头。
+2.  **端点识别:** 路由识别目标端点（例如 `/v1/chat/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/rerank`, `/v1/realtime/connection_info`）。
 3.  **路由/转发逻辑:**
-    *   **嵌入、TTS、STT:** 请求直接映射到预先配置的上游模型 (`UPSTREAM_EMBEDDING_MODEL`, `UPSTREAM_TTS_MODEL`, `UPSTREAM_STT_MODEL`)，并通过 `PROXY_BASE_URL` (HTTP) 转发。
+    *   **嵌入、TTS、STT、图像生成:** 请求直接映射到预先配置的上游模型 (`UPSTREAM_EMBEDDING_MODEL`, `UPSTREAM_TTS_MODEL`, `UPSTREAM_STT_MODEL`, `UPSTREAM_IMAGE_GENERATION_MODEL`)，并通过 `PROXY_BASE_URL` (HTTP) 转发。
+    *   **重排序:** 请求映射到预先配置的 `UPSTREAM_RERANK_MODEL`，并通过 **直接 HTTP 调用** 发送到代理服务器上的 `/v1/rerank` 路径。
     *   **聊天完成:**
         *   如果存在 `tools` 或 `tool_choice`，请求将转发到 `DIRECT_TOOL_CALL_MODEL`。
         *   否则，路由提取文本内容，调用 `ROUTING_MODEL`（例如 `gemini-2.0-flash`）并使用特定的函数调用指令 (`select_upstream_model`) 来确定任务类型（编码、写作等）。
@@ -43,8 +53,8 @@
         *   路由验证模型 ID (`MCJPG-Zero-v1`) 和用户 API 密钥。
         *   使用配置的 `PROXY_WEBSOCKET_BASE_URL` 和 `REALTIME_PATH_PREFIX` 以及 `UPSTREAM_REALTIME_MODEL` 构造目标 WebSocket URL。
         *   返回包含目标 WebSocket URL、上游模型名称 (`UPSTREAM_REALTIME_MODEL`) 和用户 API 密钥的 JSON 响应。
-4.  **请求准备 (HTTP):** 对于 HTTP 请求，路由为选定的上游模型构建最终的请求负载。对于聊天，它会注入 `MCJPG_SYSTEM_PROMPT` 并使用原始消息。对于其他类型，它使用映射后的上游模型 ID。
-5.  **上游调用 (HTTP):** 路由通过配置的 `PROXY_BASE_URL` 将准备好的 HTTP 请求发送到上游模型，并传递用户的 API 密钥。
+4.  **请求准备 (HTTP):** 对于 HTTP 请求，路由为选定的上游模型构建最终的请求负载。对于聊天，它会注入 `MCJPG_SYSTEM_PROMPT` 并使用原始消息。对于其他类型，它使用映射后的上游模型 ID。对于重排序，它使用原始请求体但替换模型 ID。
+5.  **上游调用 (HTTP):** 路由通过配置的 `PROXY_BASE_URL` (或 `/v1/rerank` 路径) 将准备好的 HTTP 请求发送到上游模型/服务，并传递用户的 API 密钥。
 6.  **响应处理:**
     *   **HTTP:** 路由从上游模型接收响应，并将其流式传输或直接返回给原始用户。
     *   **Realtime:** 路由将连接信息返回给客户端。**客户端需要负责使用返回的 URL 和 API 密钥，通过 WebSocket 协议连接到指定的上游实时模型（经由代理）。**
@@ -55,7 +65,7 @@
 *   **FastAPI:** 用于构建 API 的高性能 Web 框架。
 *   **Pydantic:** 数据验证和设置管理。
 *   **OpenAI Python SDK:** 用于与上游 OpenAI 兼容 API 交互（包括类型定义）。
-*   **HTTPX:** OpenAI SDK 使用的底层异步 HTTP 客户端。
+*   **HTTPX:** OpenAI SDK 使用的底层异步 HTTP 客户端，也用于直接调用 Rerank API。
 *   **python-dotenv:** 用于从 `.env` 文件加载环境变量。
 *   **uvicorn:** 用于运行 FastAPI 应用程序的 ASGI 服务器。
 *   **python-multipart:** 处理文件上传（STT）所需。
@@ -86,15 +96,15 @@
     在项目的根目录下创建一个名为 `.env` 的文件。添加以下变量：
 
     ```dotenv
-    # 必需：上游 OpenAI 兼容代理的 HTTP 基础 URL (必须以 / 结尾)
-    # 示例：PROXY_BASE_URL=https://proxy.mcjpg.org:29678/
+    # --- 基础配置 (必需) ---
+    # 上游 OpenAI 兼容代理的 HTTP 基础 URL (必须以 / 结尾)
+    # 例如：PROXY_BASE_URL=https://proxy.mcjpg.org:29678/
     PROXY_BASE_URL=https://proxy.mcjpg.org:29678/
 
-    # --- 以下为可选配置 ---
-
+    # --- 实时 API 配置 (可选) ---
     # 上游 WebSocket 代理的基础 URL (用于实时 API, 必须以 / 结尾)
     # 如果未设置，将尝试从 PROXY_BASE_URL 推断 (https -> wss, http -> ws)
-    # 示例：PROXY_WEBSOCKET_BASE_URL=wss://proxy.mcjpg.org:29678/
+    # 例如：PROXY_WEBSOCKET_BASE_URL=wss://proxy.mcjpg.org:29678/
     # PROXY_WEBSOCKET_BASE_URL=
 
     # 代理上实时 WebSocket 端点的路径前缀 (不含模型名称, 不以 / 开头或结尾)
@@ -102,18 +112,27 @@
     # 最终 URL 示例: wss://proxy.../v1/realtime/gpt-4o-realtime-preview
     # REALTIME_PATH_PREFIX=v1/realtime
 
-    # 覆盖默认的模型名称
+    # --- 上游模型名称配置 (可选, 覆盖代码中的默认值) ---
+    # 用于内容路由的决策模型
     # ROUTING_MODEL=gemini-2.0-flash
+    # 处理工具调用的聊天模型
     # DIRECT_TOOL_CALL_MODEL=gpt-4o-mini
+    # 嵌入模型
     # UPSTREAM_EMBEDDING_MODEL=text-embedding-3-large
+    # 文本转语音 (TTS) 模型
     # UPSTREAM_TTS_MODEL=tts-1
+    # 语音转文本 (STT) 模型
     # UPSTREAM_STT_MODEL=whisper-1
+    # 图像生成模型
+    # UPSTREAM_IMAGE_GENERATION_MODEL=dall-e-3
+    # 重排序模型
+    # UPSTREAM_RERANK_MODEL=jina-reranker-v2-base-multilingual
+    # 实时 API 模型
     # UPSTREAM_REALTIME_MODEL=gpt-4o-realtime-preview
     ```
     *   `PROXY_BASE_URL` **至关重要**。
-    *   `PROXY_WEBSOCKET_BASE_URL` 对 Realtime API 很重要，如果你的 WebSocket 代理地址与 HTTP 不同，或者协议不同，请务必设置。
-    *   `REALTIME_PATH_PREFIX` 定义了 WebSocket URL 中模型名称之前的路径部分。
-    *   其他模型名称默认为代码中显示的值。
+    *   `PROXY_WEBSOCKET_BASE_URL` 和 `REALTIME_PATH_PREFIX` 对 Realtime API 很重要。
+    *   **你可以通过设置上述 `UPSTREAM_...` 变量来更改路由将请求转发到的具体上游模型名称，而无需修改 Python 代码。** 例如，如果你想使用 `dall-e-2` 而不是 `dall-e-3` 进行图像生成，只需在 `.env` 文件中添加 `UPSTREAM_IMAGE_GENERATION_MODEL=dall-e-2`。
 
 5.  **运行服务器:**
     ```bash
@@ -190,7 +209,38 @@ curl -X POST "<路由URL>/v1/audio/transcriptions" \
      -F model="MCJPG-Zero-v1"
 ```
 
-**6. 获取实时 API 连接信息 (Realtime):**
+**6. 图像生成 (Image Generation):**
+```bash
+curl -X POST "<路由URL>/v1/images/generations" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <你的API密钥>" \
+     -d '{
+       "model": "MCJPG-Zero-v1",
+       "prompt": "一只可爱的Minecraft风格苦力怕在草地上",
+       "n": 1,
+       "size": "1024x1024"
+     }'
+```
+
+**7. 重排序 (Rerank):**
+```bash
+curl -X POST "<路由URL>/v1/rerank" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <你的API密钥>" \
+     -d '{
+       "model": "MCJPG-Zero-v1",
+       "query": "最佳的Minecraft红石教程",
+       "documents": [
+         "一个关于早期红石电路的教程",
+         "Minecraft红石入门指南",
+         "高级红石技巧和自动化农场",
+         "如何在Minecraft中建造简单的门"
+       ],
+       "top_n": 3
+     }'
+```
+
+**8. 获取实时 API 连接信息 (Realtime):**
 
 *   **第一步：调用路由获取连接信息**
 
@@ -203,7 +253,7 @@ curl -X POST "<路由URL>/v1/audio/transcriptions" \
          }'
     ```
 
-*   **预期响应示例:**
+*   **预期响应示例:** (URL 和模型名称取决于你的配置)
 
     ```json
     {
@@ -226,17 +276,18 @@ curl -X POST "<路由URL>/v1/audio/transcriptions" \
 
 ## API 端点摘要
 
-| 端点                             | 方法 | 请求模型                  | 描述                                                               | 上游模型（默认）                                     |
-| :------------------------------- | :----- | :-------------------------- | :----------------------------------------------------------------- | :---------------------------------------------------------- |
-| `/v1/models`                     | GET    | -                           | 列出可用的模型 ID (`MCJPG-Zero-v1`)                                  | N/A                                                  |
-| `/v1/chat/completions`           | POST   | `ChatCompletionRequest`   | 处理聊天请求，根据内容进行路由                                     | `gemini-2.0-flash`, `gpt-4o-mini`, `claude-3...`, 等       |
-| `/v1/embeddings`                 | POST   | `EmbeddingRequest`        | 创建文本嵌入向量                                                   | `text-embedding-3-large`                               |
-| `/v1/audio/speech`               | POST   | `TTSRequest`              | 从文本生成语音 (TTS)                                               | `tts-1`                                                |
-| `/v1/audio/transcriptions`       | POST   | *(表单数据)*              | 将音频转录为文本 (STT)                                             | `whisper-1`                                            |
-| **`/v1/realtime/connection_info`** | **POST** | **`RealtimeConnectionRequest`** | **获取用于建立 WebSocket 连接到实时 API 的信息（URL, Key）** | **`gpt-4o-realtime-preview` (间接)**                      |
+| 端点                             | 方法    | 请求模型                     | 描述                                                            | 上游模型（默认）                                         |
+| :------------------------------- | :----- | :-------------------------- | :---------------------------------------------------------------| :--------------------------------------------------------|
+| `/v1/models`                     | GET    | -                           | 列出可用的模型 ID (`MCJPG-Zero-v1`)                              | N/A                                                      |
+| `/v1/chat/completions`           | POST   | `ChatCompletionRequest`     | 处理聊天请求，根据内容进行路由                                    | `gemini-2.0-flash`, `gpt-4o-mini`, `claude-3...`, 等      |
+| `/v1/embeddings`                 | POST   | `EmbeddingRequest`          | 创建文本嵌入向量                                                 | `text-embedding-3-large`                                  |
+| `/v1/audio/speech`               | POST   | `TTSRequest`                | 从文本生成语音 (TTS)                                             | `tts-1`                                                   |
+| `/v1/audio/transcriptions`       | POST   | (表单数据)                  | 将音频转录为文本 (STT)                                            | `whisper-1`                                              |
+| `/v1/images/generations`         | POST   | `ImageGenerationRequest`    | 生成图像                                                         | `dall-e-3`                                               |
+| `/v1/rerank`                     | POST   | `RerankRequest`             | 对文档列表进行重排序                                              | `jina-reranker-v2-base-multilingual`                     |
+| `/v1/realtime/connection_info`   | POST   | `RealtimeConnectionRequest` | 获取用于建立 WebSocket 连接到实时 API 的信息（URL, Key）           | `gpt-4o-realtime-preview` (间接)                          |
 
 ## 贡献指南
-
 
 欢迎贡献！如果你想做出贡献，请遵循以下步骤：
 *   在 GitHub 上 **Fork** 本仓库。
@@ -251,10 +302,10 @@ curl -X POST "<路由URL>/v1/audio/transcriptions" \
 
 ## 许可证
 
-本项目采用 [MIT] 许可证授权 
+本项目采用 [MIT](./LICENSE) 许可证授权 （请确保项目中包含一个名为 LICENSE 的 MIT 许可证文件）
 
 ## 致谢
 
-*   由 [MCJPG](https://mcjpg.org/) 组织开发和维护。 
+*   由 [MCJPG](https://mcjpg.org/) 组织开发和维护。
 *   基于优秀的 [FastAPI](https://fastapi.tiangolo.com/) 框架构建。
 *   依赖 [OpenAI Python SDK](https://github.com/openai/openai-python)。
