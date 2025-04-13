@@ -23,8 +23,8 @@
     *   嵌入请求 (`/v1/embeddings`) 将发送到文本嵌入模型（例如 `text-embedding-3-large`）。
     *   文本转语音 (TTS) 请求 (`/v1/audio/speech`) 将发送到 TTS 模型（例如 `tts-1`）。
     *   语音转文本 (STT) 请求 (`/v1/audio/transcriptions`) 将发送到 STT 模型（例如 `whisper-1`）。
-    *   **图像生成请求 (`/v1/images/generations`) 将发送到图像生成模型（例如 `dall-e-3`）。**
-    *   **重排序请求 (`/v1/rerank`) 将发送到重排序模型（例如 `jina-reranker-v2-base-multilingual`）。**
+    *   图像生成请求 (`/v1/images/generations`) 将发送到图像生成模型（例如 `dall-e-3`）。
+    *   重排序请求 (`/v1/rerank`) 将发送到重排序模型（例如 `jina-reranker-v2-base-multilingual`）。
 *   **实时 API 支持 (Realtime):** 提供连接信息 (`/v1/realtime/connection_info` 端点)，使客户端能通过代理与上游实时模型（例如 `gpt-4o-realtime-preview`）建立 WebSocket 连接。**注意：本路由不直接代理 WebSocket 流量，而是提供连接所需的信息。**
 *   **流式支持:** 处理聊天完成（Chat Completions）和文本转语音（Text-to-Speech）的 HTTP 流式响应。
 *   **系统提示词注入:** 自动在聊天请求前添加可配置的系统提示词（例如，定义 AI 源自 MCJPG），同时尊重用户提供的系统提示词。
