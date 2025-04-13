@@ -1,9 +1,3 @@
-好的，我已经更新了 `README.md` 文件，加入了图像生成 (DALL-E 3) 和重排序 (Jina Reranker) 功能的说明、API 调用示例，并添加了如何通过环境变量修改所有上上游模型名称的部分。
-
-请查看以下更新后的 `README.md` 内容：
-
---- START OF FILE README.md ---
-
 # MCJPG Zero AI
 
 [![许可证: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE) <!-- 确保你有一个 LICENSE 文件 -->
@@ -282,7 +276,7 @@ curl -X POST "<路由URL>/v1/rerank" \
 | `/v1/chat/completions`           | POST   | `ChatCompletionRequest`     | 处理聊天请求，根据内容进行路由                                    | `gemini-2.0-flash`, `gpt-4o-mini`, `claude-3...`, 等      |
 | `/v1/embeddings`                 | POST   | `EmbeddingRequest`          | 创建文本嵌入向量                                                 | `text-embedding-3-large`                                  |
 | `/v1/audio/speech`               | POST   | `TTSRequest`                | 从文本生成语音 (TTS)                                             | `tts-1`                                                   |
-| `/v1/audio/transcriptions`       | POST   | (表单数据)                  | 将音频转录为文本 (STT)                                            | `whisper-1`                                              |
+| `/v1/audio/transcriptions`       | POST   | `STTRequest`                  | 将音频转录为文本 (STT)                                            | `whisper-1`                                              |
 | `/v1/images/generations`         | POST   | `ImageGenerationRequest`    | 生成图像                                                         | `dall-e-3`                                               |
 | `/v1/rerank`                     | POST   | `RerankRequest`             | 对文档列表进行重排序                                              | `jina-reranker-v2-base-multilingual`                     |
 | `/v1/realtime/connection_info`   | POST   | `RealtimeConnectionRequest` | 获取用于建立 WebSocket 连接到实时 API 的信息（URL, Key）           | `gpt-4o-realtime-preview` (间接)                          |
