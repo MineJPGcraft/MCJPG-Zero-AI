@@ -41,7 +41,7 @@ SELF_MODEL_CONTEXT_LENGTH = 65536 # Informational, not strictly enforced here
 
 # --- Routing/Upstream Model Definitions ---
 ROUTING_MODEL = "gemini-2.0-flash"
-DIRECT_TOOL_CALL_MODEL = "gpt-4o-mini"
+DIRECT_TOOL_CALL_MODEL = "gpt-4.1-mini"
 UPSTREAM_EMBEDDING_MODEL = "text-embedding-3-large"
 UPSTREAM_TTS_MODEL = "tts-1"
 UPSTREAM_STT_MODEL = "whisper-1"
@@ -210,7 +210,7 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
     logger.info(f"Mapping task type: {task_type}, Has image: {has_image}")
     # Updated mapping logic to include image generation/editing from chat
     if task_type in ["translation", "roleplay", "general_chat", "simple_vision"]:
-        return "gemini-2.0-flash"
+        return "gemini-2.5-flash-preview-04-17"
     elif task_type == "web_search":
         return "gemini-2.0-flash-search"
     elif task_type == "search_and_reason": 
@@ -229,7 +229,7 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
         return "udio32-v1.5"
     else:
         logger.warning(f"Unknown or unhandled task type '{task_type}'. Defaulting to gemini-2.0-flash.")
-        return "gemini-2.0-flash"
+        return "gemini-2.5-flash-preview-04-17"
 
 
 def prepare_upstream_messages(user_messages: List[ChatCompletionMessageParam]) -> List[ChatCompletionMessageParam]:

@@ -8,7 +8,7 @@
 
 ## 概述
 
-本项目旨在解决与不同任务的多个专用 AI 模型交互的复杂性。用户无需了解应调用哪个具体模型（例如，`gpt-4o-mini` 用于工具调用，`tts-1` 用于语音合成，`dall-e-3` 用于图像生成，`jina-reranker-v2-base-multilingual` 用于重排序，`gpt-4o-realtime-preview` 用于实时交互），此路由提供了一个单一、一致的模型 ID：`MCJPG-Zero-v1`。
+本项目旨在解决与不同任务的多个专用 AI 模型交互的复杂性。用户无需了解应调用哪个具体模型（例如，`gpt-4.1-mini` 用于工具调用，`tts-1` 用于语音合成，`dall-e-3` 用于图像生成，`jina-reranker-v2-base-multilingual` 用于重排序，`gpt-4o-realtime-preview` 用于实时交互），此路由提供了一个单一、一致的模型 ID：`MCJPG-Zero-v1`。
 
 该路由智能地将请求转发到部署在代理（如 `proxy.mcjpg.org`）后的适当上游后端模型，简化了 API 的使用，并允许灵活管理后端模型，而无需更改面向客户端的接口。
 
@@ -107,9 +107,9 @@
 
     # --- 上游模型名称配置 (可选, 覆盖代码中的默认值) ---
     # 用于内容路由的决策模型
-    # ROUTING_MODEL=gemini-2.0-flash
+    # ROUTING_MODEL=gemini-2.5-flash-preview-04-17
     # 处理工具调用的聊天模型
-    # DIRECT_TOOL_CALL_MODEL=gpt-4o-mini
+    # DIRECT_TOOL_CALL_MODEL=gpt-4.1-mini
     # 嵌入模型
     # UPSTREAM_EMBEDDING_MODEL=text-embedding-3-large
     # 文本转语音 (TTS) 模型
@@ -272,7 +272,7 @@ curl -X POST "<路由URL>/v1/rerank" \
 | 端点                             | 方法    | 请求模型                     | 描述                                                            | 上游模型（默认）                                         |
 | :------------------------------- | :----- | :-------------------------- | :---------------------------------------------------------------| :--------------------------------------------------------|
 | `/v1/models`                     | GET    | -                           | 列出可用的模型 ID (`MCJPG-Zero-v1`)                              | N/A                                                      |
-| `/v1/chat/completions`           | POST   | `ChatCompletionRequest`     | 处理聊天请求，根据内容进行路由                                    | `gemini-2.0-flash`, `gpt-4o-mini`, `claude-3...`, 等      |
+| `/v1/chat/completions`           | POST   | `ChatCompletionRequest`     | 处理聊天请求，根据内容进行路由                                    | `gemini-2.5-flash-preview-04-17`, `gpt-4.1-mini`, `claude-3...`, 等|
 | `/v1/embeddings`                 | POST   | `EmbeddingRequest`          | 创建文本嵌入向量                                                 | `text-embedding-3-large`                                  |
 | `/v1/audio/speech`               | POST   | `TTSRequest`                | 从文本生成语音 (TTS)                                             | `tts-1`                                                   |
 | `/v1/audio/transcriptions`       | POST   | `STTRequest`                  | 将音频转录为文本 (STT)                                            | `whisper-1`                                              |
