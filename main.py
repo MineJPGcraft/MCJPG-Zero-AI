@@ -47,7 +47,7 @@ UPSTREAM_TTS_MODEL = "tts-1"
 UPSTREAM_STT_MODEL = "whisper-1"
 UPSTREAM_REALTIME_MODEL = "gpt-4o-realtime-preview"
 UPSTREAM_IMAGE_GENERATION_MODEL = "dall-e-3"
-UPSTREAM_RERANK_MODEL = "jina-reranker-v2-base-multilingual"
+UPSTREAM_RERANK_MODEL = "jina-reranker-m0"
 
 # --- Realtime Proxy Configuration ---
 PROXY_WEBSOCKET_BASE_URL = os.getenv("PROXY_WEBSOCKET_BASE_URL", PROXY_BASE_URL.replace("https://", "wss://").replace("http://", "ws://"))
@@ -210,17 +210,17 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
     logger.info(f"Mapping task type: {task_type}, Has image: {has_image}")
     # Updated mapping logic to include image generation/editing from chat
     if task_type in ["translation", "roleplay", "general_chat", "simple_vision"]:
-        return "gemini-2.5-flash-preview-04-17"
+        return "gemini-2.0-flash"
     elif task_type == "web_search":
-        return "gemini-2.0-flash-search"
+        return "gemini-2.5-flash-preview-05-20-nothinking-search"
     elif task_type == "search_and_reason": 
-        return "gemini-2.0-flash-search" if has_image else "jina-deepsearch-v1"
+        return "gemini-2.5-flash-preview-05-20-nothinking-search" if has_image else "jina-deepsearch-v1"
     elif task_type == "coding":
-        return "claude-3-7-sonnet-20250219"
+        return "gemini-2.5-pro-preview-05-06"
     elif task_type == "writing":
-        return "claude-3-7-sonnet-20250219" if has_image else "DeepSeek-V3"
+        return "gemini-2.5-flash-preview-05-20" if has_image else "DeepSeek-V3"
     elif task_type == "math_data_analysis":
-        return "gemini-2.5-pro-exp-03-25" if has_image else "DeepSeek-R1"
+        return "gemini-2.5-pro-preview-05-06" if has_image else "DeepSeek-R1"
     elif task_type in ["image_generation", "image_editing"]:
         return "gpt-4o-image" 
     elif task_type == "video_generation":
@@ -229,7 +229,7 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
         return "udio32-v1.5"
     else:
         logger.warning(f"Unknown or unhandled task type '{task_type}'. Defaulting to gemini-2.0-flash.")
-        return "gemini-2.5-flash-preview-04-17"
+        return "gemini-2.0-flash"
 
 
 def prepare_upstream_messages(user_messages: List[ChatCompletionMessageParam]) -> List[ChatCompletionMessageParam]:
@@ -735,12 +735,12 @@ async def create_chat_completion(
                  "Analyze the user's message content (text only, image presence is indicated by '[Image provided by user]') and determine the primary task. "
                  "Use the 'select_upstream_model' function to indicate your choice based on the following criteria:\n"
                  "- **translation, roleplay, general_chat, simple_vision**: Use 'gemini-2.0-flash'.\n"
-                 "- **web_search**: Use 'gemini-2.0-flash-search' for questions needing live web data.\n"
-                 "- **search_and_reason**: Use 'jina-deepsearch-v1' for questions requiring web search combined with reasoning. (If image present, use 'gemini-2.0-flash-search')\n"
-                 "- **coding**: Use 'claude-3-7-sonnet-20250219' for programming or code-related questions.\n"
+                 "- **web_search**: Use 'gemini-2.5-flash-preview-05-20-nothinking-search' for questions needing live web data.\n"
+                 "- **search_and_reason**: Use 'jina-deepsearch-v1' for questions requiring web search combined with reasoning. (If image present, use 'gemini-2.5-flash-preview-05-20-nothinking-search')\n"
+                 "- **coding**: Use 'gemini-2.5-pro-preview-05-06' for programming or code-related questions.\n"
                  "- **writing**: Use 'DeepSeek-V3' for creative writing, summaries, etc. (If image present, use 'claude-3-7-sonnet-20250219').\n"
-                 "- **math_data_analysis**: Use 'DeepSeek-R1' for math problems, data analysis. (If image present, use 'gemini-2.5-pro-exp-03-25').\n"
-                 # Updated description for image tasks in chat
+                 "- **math_data_analysis**: Use 'DeepSeek-R1' for math problems, data analysis. (If image present, use 'gemini-2.5-pro-preview-05-06').\n"
+                  Updated description for image tasks in chat
                  "- **image_generation, image_editing**: Use 'gpt-4o-image' if the user asks to generate/edit an image *within the chat context*.\n"
                  "- **video_generation**: Use 'luma-video' if the user asks to generate a video.\n"
                  "- **music_generation**: Use 'udio32-v1.5' if the user asks to generate music.\n"

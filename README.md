@@ -272,12 +272,12 @@ curl -X POST "<路由URL>/v1/rerank" \
 | 端点                             | 方法    | 请求模型                     | 描述                                                            | 上游模型（默认）                                         |
 | :------------------------------- | :----- | :-------------------------- | :---------------------------------------------------------------| :--------------------------------------------------------|
 | `/v1/models`                     | GET    | -                           | 列出可用的模型 ID (`MCJPG-Zero-v1`)                              | N/A                                                      |
-| `/v1/chat/completions`           | POST   | `ChatCompletionRequest`     | 处理聊天请求，根据内容进行路由                                    | `gemini-2.5-flash-preview-04-17`, `gpt-4.1-mini`, `claude-3...`, 等|
+| `/v1/chat/completions`           | POST   | `ChatCompletionRequest`     | 处理聊天请求，根据内容进行路由                                    | `gemini-2.0-flash`, `gpt-4.1-mini`, `claude-3...`, 等|
 | `/v1/embeddings`                 | POST   | `EmbeddingRequest`          | 创建文本嵌入向量                                                 | `text-embedding-3-large`                                  |
 | `/v1/audio/speech`               | POST   | `TTSRequest`                | 从文本生成语音 (TTS)                                             | `tts-1`                                                   |
 | `/v1/audio/transcriptions`       | POST   | `STTRequest`                  | 将音频转录为文本 (STT)                                            | `whisper-1`                                              |
 | `/v1/images/generations`         | POST   | `ImageGenerationRequest`    | 生成图像                                                         | `dall-e-3`                                               |
-| `/v1/rerank`                     | POST   | `RerankRequest`             | 对文档列表进行重排序                                              | `jina-reranker-v2-base-multilingual`                     |
+| `/v1/rerank`                     | POST   | `RerankRequest`             | 对文档列表进行重排序                                              | `jina-reranker-m0`                     |
 | `/v1/realtime/connection_info`   | POST   | `RealtimeConnectionRequest` | 获取用于建立 WebSocket 连接到实时 API 的信息（URL, Key）           | `gpt-4o-realtime-preview` (间接)                          |
 
 ## 贡献指南
