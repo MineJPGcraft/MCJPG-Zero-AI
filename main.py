@@ -670,7 +670,7 @@ async def create_rerank(
         await http_client.aclose()
 
 
-# --- Chat Completions Endpoint (Remains largely the same, but routing criteria updated) ---
+# --- Chat Completions Endpoint (MODIFIED TO PASS ALL PARAMETERS) ---
 @app.post(f"/{V1_ROUTE_PREFIX}/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
@@ -740,7 +740,7 @@ async def create_chat_completion(
                  "- **coding**: Use 'gemini-2.5-pro' for programming or code-related questions.\n"
                  "- **writing**: Use 'DeepSeek-V3' for creative writing, summaries, etc. (If image present, use 'claude-3-7-sonnet-20250219').\n"
                  "- **math_data_analysis**: Use 'DeepSeek-R1' for math problems, data analysis. (If image present, use 'gemini-2.5-pro-preview-05-06').\n"
-                  Updated description for image tasks in chat
+                  "Updated description for image tasks in chat"
                  "- **image_generation, image_editing**: Use 'gpt-4o-image' if the user asks to generate/edit an image *within the chat context*.\n"
                  "- **video_generation**: Use 'luma-video' if the user asks to generate a video.\n"
                  "- **music_generation**: Use 'udio32-v1.5' if the user asks to generate music.\n"
@@ -819,25 +819,26 @@ async def create_chat_completion(
         # Prepare final messages including the MCJPG system prompt
         final_messages = prepare_upstream_messages([msg.model_dump(exclude_none=True) for msg in request.messages])
 
-        # Prepare payload, only include tools/choice if it was a direct tool call request
-        upstream_payload = {
-            "model": upstream_model_name,
-            "messages": final_messages,
-            "stream": request.stream,
-            "tools": request.tools if is_direct_tool_call else None,
-            "tool_choice": request.tool_choice if is_direct_tool_call else None,
-            # Pass through other standard parameters
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-            "n": request.n,
-            "stop": request.stop,
-            "max_tokens": request.max_tokens,
-            "presence_penalty": request.presence_penalty,
-            "frequency_penalty": request.frequency_penalty,
-            "logit_bias": request.logit_bias,
-            "user": request.user,
-        }
-        upstream_payload = {k: v for k, v in upstream_payload.items() if v is not None} # Clean None values
+        # >>> START OF MODIFICATION <<<
+        #
+        # 1. Get all parameters from the original request.
+        #    This captures temperature, top_p, max_tokens, etc., if the user provided them.
+        upstream_payload = request.model_dump(exclude_none=True)
+
+        # 2. Override the necessary parameters for the upstream call.
+        upstream_payload["model"] = upstream_model_name
+        upstream_payload["messages"] = final_messages
+
+        # 3. If it was a content-routed call (not a direct tool call),
+        #    ensure tool parameters are not sent upstream.
+        if not is_direct_tool_call:
+            upstream_payload.pop("tools", None)
+            upstream_payload.pop("tool_choice", None)
+        
+        # The payload is now correctly assembled with all user-provided parameters.
+        # No need for a final cleanup as model_dump(exclude_none=True) and pop handle it.
+        #
+        # >>> END OF MODIFICATION <<<
 
         if request.stream:
             # --- Handle Streaming Response ---
@@ -924,4 +925,4 @@ if __name__ == "__main__":
     logger.info(f"Starting MCJPG AI Router v{app.version}...")
 
     # Use "main:app" if running directly
-    uvicorn.run("main:app", host="127.0.0.1", port=8005, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8005, reload=False)
