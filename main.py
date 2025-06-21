@@ -30,7 +30,7 @@ from urllib.parse import urljoin # For safely joining URL parts
 # --- 配置 ---
 load_dotenv() # 加载 .env 文件 (如果存在)
 
-PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "https://proxy.mcjpg.org:29678")
+PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "http://127.0.0.1:3000")
 if not PROXY_BASE_URL.endswith('/'):
     PROXY_BASE_URL += '/'
 V1_ROUTE_PREFIX = "v1"
@@ -212,13 +212,13 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
     if task_type in ["translation", "roleplay", "general_chat", "simple_vision"]:
         return "gemini-2.0-flash"
     elif task_type == "web_search":
-        return "gemini-2.5-flash-preview-05-20-nothinking-search"
+        return "gemini-2.5-flash-search"
     elif task_type == "search_and_reason": 
-        return "gemini-2.5-flash-preview-05-20-nothinking-search" if has_image else "jina-deepsearch-v1"
+        return "gemini-2.5-flash-search" if has_image else "jina-deepsearch-v1"
     elif task_type == "coding":
-        return "gemini-2.5-pro-preview-05-06"
+        return "gemini-2.5-pro"
     elif task_type == "writing":
-        return "gemini-2.5-flash-preview-05-20" if has_image else "DeepSeek-V3"
+        return "gemini-2.5-flash" if has_image else "DeepSeek-V3"
     elif task_type == "math_data_analysis":
         return "gemini-2.5-pro-preview-05-06" if has_image else "DeepSeek-R1"
     elif task_type in ["image_generation", "image_editing"]:
@@ -735,9 +735,9 @@ async def create_chat_completion(
                  "Analyze the user's message content (text only, image presence is indicated by '[Image provided by user]') and determine the primary task. "
                  "Use the 'select_upstream_model' function to indicate your choice based on the following criteria:\n"
                  "- **translation, roleplay, general_chat, simple_vision**: Use 'gemini-2.0-flash'.\n"
-                 "- **web_search**: Use 'gemini-2.5-flash-preview-05-20-nothinking-search' for questions needing live web data.\n"
-                 "- **search_and_reason**: Use 'jina-deepsearch-v1' for questions requiring web search combined with reasoning. (If image present, use 'gemini-2.5-flash-preview-05-20-nothinking-search')\n"
-                 "- **coding**: Use 'gemini-2.5-pro-preview-05-06' for programming or code-related questions.\n"
+                 "- **web_search**: Use 'gemini-2.5-flash-search' for questions needing live web data.\n"
+                 "- **search_and_reason**: Use 'jina-deepsearch-v1' for questions requiring web search combined with reasoning. (If image present, use 'gemini-2.5-flash-search')\n"
+                 "- **coding**: Use 'gemini-2.5-pro' for programming or code-related questions.\n"
                  "- **writing**: Use 'DeepSeek-V3' for creative writing, summaries, etc. (If image present, use 'claude-3-7-sonnet-20250219').\n"
                  "- **math_data_analysis**: Use 'DeepSeek-R1' for math problems, data analysis. (If image present, use 'gemini-2.5-pro-preview-05-06').\n"
                   Updated description for image tasks in chat

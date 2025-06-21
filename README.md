@@ -18,7 +18,7 @@
 *   **OpenAI API 兼容:** 遵循 OpenAI API 请求/响应格式，可与现有工具和库无缝集成（HTTP 部分）。
 *   **智能聊天路由:** 分析聊天消息内容（仅文本），为编码、写作、网络搜索、通用聊天等任务选择最合适的上游模型。
 *   **直接请求转发:** 将特定类型的请求直接路由到指定的上游模型：
-    *   包含 `tools` 或 `tool_choice` 的聊天请求将发送到支持工具调用的模型（例如 `gpt-4o-mini`）。
+    *   包含 `tools` 或 `tool_choice` 的聊天请求将发送到支持工具调用的模型（例如 `gpt-4.1-mini`）。
     *   嵌入请求 (`/v1/embeddings`) 将发送到文本嵌入模型（例如 `text-embedding-3-large`）。
     *   文本转语音 (TTS) 请求 (`/v1/audio/speech`) 将发送到 TTS 模型（例如 `tts-1`）。
     *   语音转文本 (STT) 请求 (`/v1/audio/transcriptions`) 将发送到 STT 模型（例如 `whisper-1`）。
@@ -295,7 +295,7 @@ curl -X POST "<路由URL>/v1/rerank" \
 
 ## 许可证
 
-本项目采用 [MIT](./LICENSE) 许可证授权 （请确保项目中包含一个名为 LICENSE 的 MIT 许可证文件）
+本项目采用 [MIT](./LICENSE) 许可证授权
 
 ## 致谢
 
