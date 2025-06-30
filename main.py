@@ -30,7 +30,7 @@ from urllib.parse import urljoin # For safely joining URL parts
 # --- 配置 ---
 load_dotenv() # 加载 .env 文件 (如果存在)
 
-PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "http://127.0.0.1:3000")
+PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "https://aihubmix.com")
 if not PROXY_BASE_URL.endswith('/'):
     PROXY_BASE_URL += '/'
 V1_ROUTE_PREFIX = "v1"
