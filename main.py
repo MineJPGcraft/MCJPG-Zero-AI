@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MCJPG AI Model Router",
     description="Routes requests to different upstream models (Chat, Embeddings, TTS, STT, Realtime, Image Gen, Rerank) based on content and handles tool calls.",
-    version="1.4.0", # Version bump for Image Gen and Rerank support
+    version="1.4.1", # Version bump for conditional headers
 )
 
 # --- Pydantic 模型定义 ---
@@ -156,7 +156,6 @@ class RerankResponse(BaseModel):
     model: str # Model used for reranking
     usage: Optional[Dict[str, int]] = None # Optional usage info
 
-
 # Routing Function Definition
 class SelectModelParams(BaseModel):
     reasoning: str = Field(description="解释为什么选择这个模型 Explain why this model was chosen.")
@@ -185,7 +184,6 @@ class RealtimeConnectionResponse(BaseModel):
     websocket_url: str = Field(description="The WebSocket URL the client should connect to (via proxy).")
     api_key: str = Field(description="The API key the client should use for authentication with the upstream WebSocket.")
     protocol_hint: Literal["websocket", "webrtc"] = "websocket"
-
 
 # --- 辅助函数 ---
 
@@ -231,7 +229,6 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
         logger.warning(f"Unknown or unhandled task type '{task_type}'. Defaulting to gemini-2.0-flash.")
         return "gemini-2.0-flash"
 
-
 def prepare_upstream_messages(user_messages: List[ChatCompletionMessageParam]) -> List[ChatCompletionMessageParam]:
     """准备发送给上游模型的最终消息列表，加入固定系统提示词 (For Chat)"""
     processed_messages: List[ChatCompletionMessageParam] = []
@@ -265,12 +262,22 @@ async def get_openai_client(api_key: str) -> AsyncOpenAI:
     """获取配置好的 AsyncOpenAI 客户端"""
     # Ensure the base URL is correctly formatted for the HTTP client
     http_base_url = f"{PROXY_BASE_URL.rstrip('/')}/{V1_ROUTE_PREFIX.strip('/')}"
-    # Use httpx client with proxy settings if needed for OpenAI client
-    # proxy_config = {"http://": os.getenv("HTTP_PROXY"), "https://": os.getenv("HTTPS_PROXY")} if os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY") else None
-    # http_client = httpx.AsyncClient(proxies=proxy_config)
-    # return AsyncOpenAI(api_key=api_key, base_url=http_base_url, http_client=http_client)
-    return AsyncOpenAI(api_key=api_key, base_url=http_base_url)
 
+    # --- 开始修改 ---
+    # 根据 PROXY_BASE_URL 动态添加 headers
+    default_headers = {}
+    normalized_proxy_url = PROXY_BASE_URL.strip().rstrip('/')
+    if normalized_proxy_url == "https://aihubmix.com":
+        default_headers["APP-Code"] = "CHUQ5599"
+        logger.info("Using aihubmix.com proxy. Added 'APP-Code' header.")
+    # --- 结束修改 ---
+
+    # 将 headers 传递给 OpenAI 客户端构造函数
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=http_base_url,
+        default_headers=default_headers
+    )
 
 async def handle_openai_api_error(e: Exception, upstream_model_name: str):
     """Handles errors from upstream API calls (OpenAI client or direct httpx)"""
@@ -318,11 +325,7 @@ async def handle_openai_api_error(e: Exception, upstream_model_name: str):
             "upstream_model": upstream_model_name # Custom field
         }
     }
-    # Use JSONResponse to ensure correct content type and structure
-    #raise HTTPException(status_code=status_code, detail=error_response_content)
-    # Return JSONResponse directly for better control over the error format
     return JSONResponse(status_code=status_code, content=error_response_content)
-
 
 # --- API Endpoints ---
 
@@ -330,14 +333,6 @@ async def handle_openai_api_error(e: Exception, upstream_model_name: str):
 async def list_models():
     """
     提供模型列表,包含我们自定义的模型ID.
-    Note: Listing MCJPG-Zero-v1 implies it can be used with compatible endpoints:
-    - /chat/completions (routed based on content)
-    - /embeddings (forwarded to text-embedding-3-large)
-    - /audio/speech (forwarded to tts-1)
-    - /audio/transcriptions (forwarded to whisper-1)
-    - /images/generations (forwarded to dall-e-3)
-    - /rerank (forwarded to jina-reranker-v2-base-multilingual)
-    - Realtime API interaction (initiated via /realtime/connection_info, forwarded to gpt-4o-realtime-preview)
     """
     model_data = ModelData(
         id=SELF_MODEL_ID,
@@ -354,8 +349,7 @@ async def create_embedding(
     """Handles embedding requests, forwarding to upstream."""
     user_api_key = get_user_api_key(authorization)
     if not user_api_key:
-        return await handle_openai_api_error(HTTPException(status_code=401, detail="Missing or invalid Authorization header"), SELF_MODEL_ID) # Return structured error
-
+        return await handle_openai_api_error(HTTPException(status_code=401, detail="Missing or invalid Authorization header"), SELF_MODEL_ID)
 
     if request.model != SELF_MODEL_ID:
        return await handle_openai_api_error(HTTPException(status_code=400, detail=f"Invalid model. Only '{SELF_MODEL_ID}' supported."), request.model)
@@ -368,10 +362,8 @@ async def create_embedding(
         params["model"] = UPSTREAM_EMBEDDING_MODEL # Override model name
         response = await client.embeddings.create(**params)
         logger.info(f"Successfully received embedding response from {UPSTREAM_EMBEDDING_MODEL}.")
-        # Return the response directly, Pydantic model ensures structure
         return response
     except Exception as e:
-        # Let error handler raise HTTPException or return JSONResponse
         return await handle_openai_api_error(e, UPSTREAM_EMBEDDING_MODEL)
     finally:
         if client:
@@ -399,11 +391,8 @@ async def create_speech(
         params = request.model_dump(exclude={"model"}, exclude_none=True)
         params["model"] = UPSTREAM_TTS_MODEL # Override model name
 
-        # Note: client.audio.speech.create returns a httpx.Response when streaming
         upstream_response = await client.audio.speech.create(**params)
-        # Check for non-2xx status codes from the upstream
         if upstream_response.status_code >= 300:
-            # Attempt to read error body for better logging/reporting
             try:
                 error_body = await upstream_response.aread()
                 error_detail = error_body.decode('utf-8')
@@ -411,7 +400,6 @@ async def create_speech(
             except Exception as read_err:
                 logger.error(f"Upstream TTS error ({upstream_response.status_code}), failed to read body: {read_err}")
                 error_detail = f"Upstream returned status {upstream_response.status_code}"
-            # Manually create an HTTPStatusError to pass to the handler
             status_error = httpx.HTTPStatusError(
                 message=f"Upstream TTS error: {upstream_response.status_code}",
                 request=upstream_response.request,
@@ -419,31 +407,27 @@ async def create_speech(
             )
             return await handle_openai_api_error(status_error, UPSTREAM_TTS_MODEL)
 
-
         logger.info(f"Successfully received TTS audio stream from {UPSTREAM_TTS_MODEL}.")
 
         content_type = upstream_response.headers.get("content-type", f"audio/{request.response_format}")
         filename = f"speech.{request.response_format}"
 
         async def audio_stream_generator() -> AsyncGenerator[bytes, None]:
-            nonlocal client # Allow generator to close client
-            nonlocal upstream_response # Allow generator to close response
+            nonlocal client
+            nonlocal upstream_response
             try:
                 async for chunk in upstream_response.aiter_bytes():
                     yield chunk
                 logger.info("TTS audio streaming finished.")
             except Exception as gen_err:
                  logger.error(f"Error during TTS audio stream generation: {gen_err}")
-                 # Cannot easily send JSON error in audio stream, just log
             finally:
-                # Ensure upstream response is closed
                 if upstream_response:
                     await upstream_response.aclose()
                     upstream_response = None
-                # Close client *after* streaming is done
                 if client:
                     await client.close()
-                    client = None # Prevent double close in outer finally
+                    client = None
 
         return StreamingResponse(
              audio_stream_generator(),
@@ -452,14 +436,11 @@ async def create_speech(
         )
 
     except Exception as e:
-        # Close resources if error occurred before streaming generator took over
         if upstream_response:
              await upstream_response.aclose()
         if client:
              await client.close()
-        # Let error handler return JSONResponse
         return await handle_openai_api_error(e, UPSTREAM_TTS_MODEL)
-    # Note: No finally block needed here as resources are closed within try/except or by generator
 
 # --- STT Endpoint ---
 @app.post(f"/{V1_ROUTE_PREFIX}/audio/transcriptions", response_model=Transcription)
@@ -471,7 +452,7 @@ async def create_transcription(
     prompt: Optional[str] = Form(None),
     response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = Form("json"),
     temperature: Optional[float] = Form(0.0),
-    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = Form(None, alias="timestamp_granularities[]") # Handle list from form data
+    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = Form(None, alias="timestamp_granularities[]")
 ):
     """Handles STT requests using form-data, forwarding to upstream."""
     user_api_key = get_user_api_key(authorization)
@@ -485,25 +466,20 @@ async def create_transcription(
     client = None
     try:
         client = await get_openai_client(user_api_key)
-        file_content = await file.read() # Read file content
+        file_content = await file.read()
 
-        # Handle timestamp_granularities if it's a single string vs list
         final_granularities = timestamp_granularities
         if timestamp_granularities and isinstance(timestamp_granularities, str):
-            # Attempt to parse if sent as a JSON string list, or treat as single value if needed
              try:
                  parsed_list = json.loads(timestamp_granularities)
                  if isinstance(parsed_list, list):
                      final_granularities = parsed_list
                  else:
-                     # If it's just one string like "word", wrap it in a list
                      final_granularities = [timestamp_granularities]
              except json.JSONDecodeError:
-                 # Assume it's a single value if not valid JSON list
                  final_granularities = [timestamp_granularities]
         elif timestamp_granularities is None:
              final_granularities = None
-
 
         stt_params = {
             "model": UPSTREAM_STT_MODEL,
@@ -511,19 +487,17 @@ async def create_transcription(
             "response_format": response_format,
             "temperature": temperature,
         }
-        # Add optional parameters if provided by user
         if language: stt_params["language"] = language
         if prompt: stt_params["prompt"] = prompt
-        if final_granularities: stt_params["timestamp_granularities"] = final_granularities # Pass as list
+        if final_granularities: stt_params["timestamp_granularities"] = final_granularities
 
         response = await client.audio.transcriptions.create(**stt_params)
         logger.info(f"Successfully received STT response from {UPSTREAM_STT_MODEL}.")
-        # Return the response directly, Pydantic model ensures structure
         return response
     except Exception as e:
         return await handle_openai_api_error(e, UPSTREAM_STT_MODEL)
     finally:
-        await file.close() # Ensure uploaded file handle is closed
+        await file.close()
         if client:
             await client.close()
 
@@ -536,20 +510,15 @@ async def get_realtime_connection_info(
     """Provides connection info for Realtime API (WebSocket via proxy)."""
     user_api_key = get_user_api_key(authorization)
     if not user_api_key:
-        # Realtime connection info is sensitive, return structured error
-        # Use JSONResponse directly or raise structured HTTPException
         error_content = {"error": {"message": "Missing or invalid Authorization header", "type": "authentication_error", "code": "invalid_api_key"}}
         return JSONResponse(status_code=401, content=error_content)
-
 
     if request.model != SELF_MODEL_ID:
         error_content = {"error": {"message": f"Invalid model ('{request.model}'). Only '{SELF_MODEL_ID}' supported.", "type": "invalid_request_error", "param": "model"}}
         return JSONResponse(status_code=400, content=error_content)
 
-
     logger.info(f"Preparing Realtime connection info for upstream {UPSTREAM_REALTIME_MODEL}.")
 
-    # Construct the upstream WebSocket URL via the configured proxy base and path
     upstream_path = f"{REALTIME_PATH_PREFIX.strip('/')}/{UPSTREAM_REALTIME_MODEL}"
     upstream_websocket_url = urljoin(PROXY_WEBSOCKET_BASE_URL, upstream_path)
 
@@ -558,7 +527,7 @@ async def get_realtime_connection_info(
     return RealtimeConnectionResponse(
         model=UPSTREAM_REALTIME_MODEL,
         websocket_url=upstream_websocket_url,
-        api_key=user_api_key, # Client needs this key to authenticate the WS connection
+        api_key=user_api_key,
         protocol_hint="websocket"
     )
 
@@ -585,7 +554,6 @@ async def create_image_generation(
 
         response = await client.images.generate(**params)
         logger.info(f"Successfully received Image Generation response from {UPSTREAM_IMAGE_GENERATION_MODEL}.")
-        # Return the response directly, Pydantic model ensures structure
         return response
     except Exception as e:
         return await handle_openai_api_error(e, UPSTREAM_IMAGE_GENERATION_MODEL)
@@ -594,8 +562,6 @@ async def create_image_generation(
             await client.close()
 
 # --- Rerank Endpoint ---
-# Note: Using Any as response model temporarily as Jina's exact structure might vary slightly
-# Use RerankResponse if structure is confirmed and stable.
 @app.post(f"/{V1_ROUTE_PREFIX}/rerank", response_model=RerankResponse)
 async def create_rerank(
     request: RerankRequest,
@@ -611,64 +577,58 @@ async def create_rerank(
 
     logger.info(f"Forwarding Rerank request to {UPSTREAM_RERANK_MODEL}.")
 
-    # Prepare payload for Jina, replacing model ID
     payload = request.model_dump(exclude_none=True)
     payload["model"] = UPSTREAM_RERANK_MODEL
 
-    # Construct the full upstream URL for the /rerank endpoint via the proxy
-    # Assumes the proxy forwards /v1/rerank to the correct upstream service
-    rerank_url = urljoin(HTTP_PROXY_URL_V1, "rerank") # e.g., https://proxy.../v1/rerank
+    rerank_url = urljoin(HTTP_PROXY_URL_V1, "rerank")
 
     headers = {
         "Authorization": f"Bearer {user_api_key}",
         "Content-Type": "application/json",
-        "Accept": "application/json", # Be explicit
+        "Accept": "application/json",
     }
+    
+    # --- 开始修改 ---
+    # 根据 PROXY_BASE_URL 动态添加 headers
+    normalized_proxy_url = PROXY_BASE_URL.strip().rstrip('/')
+    if normalized_proxy_url == "https://aihubmix.com":
+        headers["APP-Code"] = "CHUQ5599"
+        logger.info("Using aihubmix.com proxy for rerank. Added 'APP-Code' header.")
+    # --- 结束修改 ---
 
-    # Need a separate httpx client for this direct call
     http_client = httpx.AsyncClient()
     try:
         logger.info(f"Sending rerank request to URL: {rerank_url}")
-        response = await http_client.post(rerank_url, json=payload, headers=headers, timeout=60.0) # Add timeout
-        response.raise_for_status() # Raise HTTPStatusError for 4xx/5xx responses
+        response = await http_client.post(rerank_url, json=payload, headers=headers, timeout=60.0)
+        response.raise_for_status()
 
-        # Jina might return slightly different structures, try to parse known format
         response_data = response.json()
         logger.info(f"Successfully received Rerank response from {UPSTREAM_RERANK_MODEL}.")
 
-        # Adapt response to our RerankResponse model if possible
-        # Assume Jina response has 'results': [{'index': int, 'relevance_score': float, 'document': {'text': str}}]
-        # And might have 'model' and 'usage': {'total_tokens': int}
         adapted_results = []
         if isinstance(response_data.get("results"), list):
             for res in response_data["results"]:
-                 # Ensure required fields exist, handle potential missing 'document' if not requested/returned
                  if isinstance(res.get("index"), int) and isinstance(res.get("relevance_score"), (float, int)):
                      adapted_results.append(RerankResult(
                          index=res["index"],
                          relevance_score=float(res["relevance_score"]),
-                         document=res.get("document") # Will be None if not present
+                         document=res.get("document")
                      ))
                  else:
                      logger.warning(f"Skipping invalid rerank result item: {res}")
 
-
-        # Construct final response matching our Pydantic model
         final_response = RerankResponse(
-            id=response_data.get("id", "rerank-0"), # Use ID from Jina if available
+            id=response_data.get("id", "rerank-0"),
             results=adapted_results,
-            model=response_data.get("model", UPSTREAM_RERANK_MODEL), # Echo model used
+            model=response_data.get("model", UPSTREAM_RERANK_MODEL),
             usage=response_data.get("usage")
         )
         return final_response
 
     except Exception as e:
-        # Use the centralized error handler
-        # Pass the URL as the "model name" for logging clarity
         return await handle_openai_api_error(e, f"{UPSTREAM_RERANK_MODEL} @ /rerank")
     finally:
         await http_client.aclose()
-
 
 # --- Chat Completions Endpoint (MODIFIED TO PASS ALL PARAMETERS) ---
 @app.post(f"/{V1_ROUTE_PREFIX}/chat/completions")
@@ -681,10 +641,8 @@ async def create_chat_completion(
     if not user_api_key:
          return await handle_openai_api_error(HTTPException(status_code=401, detail="Missing or invalid Authorization header"), SELF_MODEL_ID)
 
-
     if request.model != SELF_MODEL_ID:
          return await handle_openai_api_error(HTTPException(status_code=400, detail=f"Invalid model. Only '{SELF_MODEL_ID}' supported."), request.model)
-
 
     logger.info(f"Received chat request: Stream={request.stream}, Tools={bool(request.tools or request.tool_choice)}")
 
@@ -700,36 +658,33 @@ async def create_chat_completion(
         logger.info("No tools specified. Performing content routing.")
         routing_client = None
         try:
-            routing_client = await get_openai_client(user_api_key) # Use same base URL/proxy
+            routing_client = await get_openai_client(user_api_key)
             routing_messages: List[ChatCompletionMessageParam] = []
             user_system_prompt_content = None
             user_messages_for_routing = []
-            has_image_for_routing = False # Track if image placeholder was added
+            has_image_for_routing = False
 
-            # Prepare messages for the routing model (text only)
             for msg in request.messages:
                 msg_dict = msg.model_dump(exclude_none=True)
                 role = msg_dict["role"]
                 content = msg_dict.get("content")
 
                 if role == "system":
-                    user_system_prompt_content = content # Capture user system prompt text/list
+                    user_system_prompt_content = content
 
                 content_for_routing = None
                 if isinstance(content, list):
                     text_content = " ".join([item["text"] for item in content if item.get("type") == "text"])
                     if any(item.get("type") == "image_url" for item in content):
                          text_content += " [Image provided by user]"
-                         has_image_for_routing = True # Needed for routing logic
+                         has_image_for_routing = True
                     content_for_routing = text_content
                 elif isinstance(content, str):
                     content_for_routing = content
 
-                # Add msg if it has suitable content for routing analysis
-                if content_for_routing and role != "system": # Exclude system here, add custom below
+                if content_for_routing and role != "system":
                     user_messages_for_routing.append({"role": role, "content": content_for_routing})
 
-            # Build the routing prompt (update descriptions slightly)
             routing_system_prompt = (
                  "You are an AI assistant responsible for routing user requests to the appropriate specialized AI model. "
                  "Analyze the user's message content (text only, image presence is indicated by '[Image provided by user]') and determine the primary task. "
@@ -748,15 +703,13 @@ async def create_chat_completion(
             )
             if user_system_prompt_content and isinstance(user_system_prompt_content, str):
                  routing_system_prompt += f"\n\nUser's System Prompt for context: {user_system_prompt_content}"
-            # Vision system prompts are ignored for routing for simplicity
 
             routing_messages.append({"role": "system", "content": routing_system_prompt})
             routing_messages.extend(user_messages_for_routing)
 
-            # Handle cases with no user messages for routing (e.g., only system prompt)
             if not user_messages_for_routing:
                  logger.warning("No user/assistant text messages found for routing. Defaulting.")
-                 has_image_input = contains_image(request.messages) # Check original messages for image
+                 has_image_input = contains_image(request.messages)
                  upstream_model_name = map_task_to_model("general_chat", has_image_input)
                  routing_reasoning = "Defaulted due to no routable message content."
             else:
@@ -769,7 +722,6 @@ async def create_chat_completion(
                     temperature=0.1,
                 )
 
-                # Process routing result or default
                 tool_call = response.choices[0].message.tool_calls[0] if response.choices and response.choices[0].message.tool_calls else None
                 if tool_call and tool_call.function.name == "select_upstream_model":
                     try:
@@ -777,7 +729,6 @@ async def create_chat_completion(
                         task = args.get("selected_task_type")
                         routing_reasoning = args.get("reasoning", "No reasoning provided.")
                         if task:
-                            # Check original messages for image presence when mapping
                             has_image_input = contains_image(request.messages)
                             upstream_model_name = map_task_to_model(task, has_image_input)
                             logger.info(f"Routing decision: Task='{task}', Image='{has_image_input}', Reason='{routing_reasoning}', Model='{upstream_model_name}'")
@@ -795,7 +746,6 @@ async def create_chat_completion(
                     routing_reasoning = "Defaulted due to routing model failure (no/invalid tool call)."
 
         except Exception as e:
-            # Log routing error but default instead of failing the request
             logger.exception(f"Exception during model routing: {e}. Defaulting.")
             has_image_input = contains_image(request.messages)
             upstream_model_name = map_task_to_model("general_chat", has_image_input)
@@ -806,9 +756,7 @@ async def create_chat_completion(
         # --- End Routing Logic ---
 
     if not upstream_model_name:
-         # Should be covered by defaults, but as a final fallback
          logger.error("FATAL: Upstream model name determination failed completely.")
-         # Return structured error instead of plain 500
          error_content = {"error": {"message": "Failed to determine upstream chat model after routing.", "type": "internal_server_error", "code": "routing_failure"}}
          return JSONResponse(status_code=500, content=error_content)
 
@@ -816,47 +764,31 @@ async def create_chat_completion(
     upstream_client = None
     try:
         upstream_client = await get_openai_client(user_api_key)
-        # Prepare final messages including the MCJPG system prompt
         final_messages = prepare_upstream_messages([msg.model_dump(exclude_none=True) for msg in request.messages])
 
-        # >>> START OF MODIFICATION <<<
-        #
-        # 1. Get all parameters from the original request.
-        #    This captures temperature, top_p, max_tokens, etc., if the user provided them.
         upstream_payload = request.model_dump(exclude_none=True)
 
-        # 2. Override the necessary parameters for the upstream call.
         upstream_payload["model"] = upstream_model_name
         upstream_payload["messages"] = final_messages
 
-        # 3. If it was a content-routed call (not a direct tool call),
-        #    ensure tool parameters are not sent upstream.
         if not is_direct_tool_call:
             upstream_payload.pop("tools", None)
             upstream_payload.pop("tool_choice", None)
         
-        # The payload is now correctly assembled with all user-provided parameters.
-        # No need for a final cleanup as model_dump(exclude_none=True) and pop handle it.
-        #
-        # >>> END OF MODIFICATION <<<
-
         if request.stream:
-            # --- Handle Streaming Response ---
             async def stream_generator():
                 response_stream = None
-                client_to_close_in_stream = upstream_client # Capture client instance
-                upstream_model_for_error = upstream_model_name # Capture model name
+                client_to_close_in_stream = upstream_client
+                upstream_model_for_error = upstream_model_name
                 try:
                     logger.info(f"Streaming chat request to {upstream_model_for_error}...")
                     response_stream = await client_to_close_in_stream.chat.completions.create(**upstream_payload)
                     async for chunk in response_stream:
-                        # Ensure chunk is serializable before sending
                         try:
                              chunk_json = chunk.model_dump_json(exclude_unset=True)
                              yield f"data: {chunk_json}\n\n"
                         except Exception as serial_err:
                              logger.error(f"Failed to serialize stream chunk: {serial_err}. Chunk: {chunk}")
-                             # Send an error chunk if possible (non-standard)
                              err_payload = {"error": {"message": f"Stream chunk serialization error: {str(serial_err)}", "type": "internal_serialization_error"}}
                              yield f"data: {json.dumps(err_payload)}\n\n"
 
@@ -864,47 +796,35 @@ async def create_chat_completion(
                     logger.info("Chat streaming finished.")
                 except Exception as stream_err:
                     logger.exception(f"Error during streaming from {upstream_model_for_error}: {stream_err}")
-                    # Attempt to format the error like an OpenAI API error within the stream
                     error_data = await handle_openai_api_error(stream_err, upstream_model_for_error)
-                    error_content_str = json.dumps(error_data.body.decode('utf-8') if isinstance(error_data, JSONResponse) else str(error_data)) # Get error content string
+                    error_content_str = json.dumps(error_data.body.decode('utf-8') if isinstance(error_data, JSONResponse) else str(error_data))
                     yield f"data: {error_content_str}\n\n"
-                    yield "data: [DONE]\n\n" # Still need DONE message for SSE protocol
+                    yield "data: [DONE]\n\n"
                 finally:
-                    # Close the client *after* the stream is fully consumed or errors out
                     if client_to_close_in_stream:
                         await client_to_close_in_stream.close()
 
             return StreamingResponse(stream_generator(), media_type="text/event-stream")
         else:
-            # --- Handle Non-Streaming Response ---
             logger.info(f"Sending non-streaming chat request to {upstream_model_name}...")
             completion = await upstream_client.chat.completions.create(**upstream_payload)
             logger.info(f"Received non-streaming chat response from {upstream_model_name}.")
-            # Optionally add routing info (non-standard)
-            # completion_dict = completion.model_dump(exclude_unset=True)
-            # completion_dict["routing_info"] = {"model_selected": upstream_model_name, "reasoning": routing_reasoning}
-            # return completion_dict
-            return completion # Return the Pydantic model directly, FastAPI handles serialization
+            return completion
 
     except Exception as e:
-        # Handle errors during request setup or non-streaming call
         return await handle_openai_api_error(e, upstream_model_name)
     finally:
-        # Close client only if it wasn't passed to a successful stream generator
-        if upstream_client and not (request.stream): # Only close if not streaming
+        if upstream_client and not (request.stream):
              await upstream_client.close()
-
 
 # --- 运行服务器 (用于本地测试) ---
 if __name__ == "__main__":
     import uvicorn
 
-    # Construct example Realtime URL for logging
     example_realtime_path = f"{REALTIME_PATH_PREFIX.strip('/')}/{UPSTREAM_REALTIME_MODEL}"
     example_realtime_url = urljoin(PROXY_WEBSOCKET_BASE_URL, example_realtime_path)
     http_base_url_v1 = f"{PROXY_BASE_URL.rstrip('/')}/{V1_ROUTE_PREFIX.strip('/')}"
     example_rerank_url = urljoin(http_base_url_v1, "rerank")
-
 
     print("--- MCJPG AI Router Configuration ---")
     print(f"Version: {app.version}")
@@ -924,5 +844,4 @@ if __name__ == "__main__":
     print("-" * 35)
     logger.info(f"Starting MCJPG AI Router v{app.version}...")
 
-    # Use "main:app" if running directly
     uvicorn.run("main:app", host="127.0.0.1", port=8005, reload=False)
