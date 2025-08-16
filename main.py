@@ -40,8 +40,8 @@ SELF_MODEL_ID = "MCJPG-Zero-v1"
 SELF_MODEL_CONTEXT_LENGTH = 65536 # Informational, not strictly enforced here
 
 # --- Routing/Upstream Model Definitions ---
-ROUTING_MODEL = "gemini-2.0-flash"
-DIRECT_TOOL_CALL_MODEL = "gpt-4.1-mini"
+ROUTING_MODEL = "gemini-2.5-flash-lite"
+DIRECT_TOOL_CALL_MODEL = "gpt-5-mini"
 UPSTREAM_EMBEDDING_MODEL = "text-embedding-3-large"
 UPSTREAM_TTS_MODEL = "tts-1"
 UPSTREAM_STT_MODEL = "whisper-1"
@@ -208,7 +208,7 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
     logger.info(f"Mapping task type: {task_type}, Has image: {has_image}")
     # Updated mapping logic to include image generation/editing from chat
     if task_type in ["translation", "roleplay", "general_chat", "simple_vision"]:
-        return "gemini-2.0-flash"
+        return "gemini-2.5-flash"
     elif task_type == "web_search":
         return "gemini-2.5-flash-search"
     elif task_type == "search_and_reason": 
@@ -218,7 +218,7 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
     elif task_type == "writing":
         return "gemini-2.5-flash" if has_image else "DeepSeek-V3"
     elif task_type == "math_data_analysis":
-        return "gemini-2.5-pro-preview-05-06" if has_image else "DeepSeek-R1"
+        return "gemini-2.5-pro" if has_image else "DeepSeek-R1"
     elif task_type in ["image_generation", "image_editing"]:
         return "gpt-4o-image" 
     elif task_type == "video_generation":
@@ -689,12 +689,12 @@ async def create_chat_completion(
                  "You are an AI assistant responsible for routing user requests to the appropriate specialized AI model. "
                  "Analyze the user's message content (text only, image presence is indicated by '[Image provided by user]') and determine the primary task. "
                  "Use the 'select_upstream_model' function to indicate your choice based on the following criteria:\n"
-                 "- **translation, roleplay, general_chat, simple_vision**: Use 'gemini-2.0-flash'.\n"
+                 "- **translation, roleplay, general_chat, simple_vision**: Use 'gemini-2.5-flash'.\n"
                  "- **web_search**: Use 'gemini-2.5-flash-search' for questions needing live web data.\n"
                  "- **search_and_reason**: Use 'jina-deepsearch-v1' for questions requiring web search combined with reasoning. (If image present, use 'gemini-2.5-flash-search')\n"
                  "- **coding**: Use 'gemini-2.5-pro' for programming or code-related questions.\n"
-                 "- **writing**: Use 'DeepSeek-V3' for creative writing, summaries, etc. (If image present, use 'claude-3-7-sonnet-20250219').\n"
-                 "- **math_data_analysis**: Use 'DeepSeek-R1' for math problems, data analysis. (If image present, use 'gemini-2.5-pro-preview-05-06').\n"
+                 "- **writing**: Use 'DeepSeek-V3' for creative writing, summaries, etc. (If image present, use 'gemini-2.5-flash').\n"
+                 "- **math_data_analysis**: Use 'DeepSeek-R1' for math problems, data analysis. (If image present, use 'gemini-2.5-pro').\n"
                   "Updated description for image tasks in chat"
                  "- **image_generation, image_editing**: Use 'gpt-4o-image' if the user asks to generate/edit an image *within the chat context*.\n"
                  "- **video_generation**: Use 'luma-video' if the user asks to generate a video.\n"
