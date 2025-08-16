@@ -226,8 +226,8 @@ def map_task_to_model(task_type: str, has_image: bool) -> str:
     elif task_type == "music_generation":
         return "udio32-v1.5"
     else:
-        logger.warning(f"Unknown or unhandled task type '{task_type}'. Defaulting to gemini-2.0-flash.")
-        return "gemini-2.0-flash"
+        logger.warning(f"Unknown or unhandled task type '{task_type}'. Defaulting to gemini-2.5-flash.")
+        return "gemini-2.5-flash"
 
 def prepare_upstream_messages(user_messages: List[ChatCompletionMessageParam]) -> List[ChatCompletionMessageParam]:
     """准备发送给上游模型的最终消息列表，加入固定系统提示词 (For Chat)"""
